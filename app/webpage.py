@@ -798,7 +798,7 @@ tr:last-child td{border-bottom:none}
       var t = document.createElement("table");
       var head = document.createElement("tr");
       ["名称", "归属规则", "内网 IPv6", "允许来源", "端口"]
-        .concat(hasDev ? ["设备"] : []).concat(["ID"])
+        .concat(hasDev ? ["设备"] : [])
         .forEach(function (h) {
           var th = document.createElement("th"); th.textContent = h; head.appendChild(th);
         });
@@ -808,8 +808,7 @@ tr:last-child td{border-bottom:none}
         var owner = ownerOfName(e.Name || "");
         // 第 1 列（index 1）是「归属规则」，不是原始字段，用 null 占位
         var vals = [e.Name, null, e.LocalIp, e.RemoteIp, e.Port]
-          .concat(hasDev ? [e.devName || "（未识别）"] : [])
-          .concat([e.ID]);
+          .concat(hasDev ? [e.devName || "（未识别）"] : []);
         vals.forEach(function (v, i) {
           var td = document.createElement("td");
           if (i === 1) {
