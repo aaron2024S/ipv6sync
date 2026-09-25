@@ -1,0 +1,52 @@
+# 华为路由器 IPv6 防火墙白名单同步
+#
+# 部署（全程不用 .env）：
+#   1) 改下面 environment 里的 ADMIN_USERNAME / ADMIN_PASSWORD（控制台登录账号）
+#   2) docker compose up -d --build
+#   3) 浏览器打开 http://<本机IP>:6600/ ，用上面两个变量登录
+#   4) 在网页「路由器连接」里填 路由器地址 / 管理员密码，保存即开始同步
+#      —— 其余所有设置（NAS 的 MAC、检测周期等）都在网页里改，
+#         存进 /data/settings.json，改完热生效，不用重建容器。
+#
+# 查 NAS 的 MAC（用于在网页里填「目标设备 MAC」）：
+#   docker compose run --rm ipv6sync --list-hosts
+#
+# 看一眼当前白名单：
+#   docker compose run --rm ipv6sync --whitelist
+
+services:
+  ipv6sync:
+    build: .
+    image: ipv6sync:latest
+    container_name: ipv6sync
+    restart: unless-stopped
+
+    # 唯一需要在 yaml 里设置的东西：浏览器控制台的登录账号
+    environment:
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=change-me-please
+
+    # 其余设置一律在网页里改，env_file 留给进阶用法（docker secret 等）：
+    # env_file: .env
+
+    # host 网络 —— 硬要求，不是可选项：本程序只读「本机网卡」的 IPv6，
+    # 只有 host 网络下「本机」才是 NAS 自己。换成 bridge 会读到容器自己的
+    # 网卡（里面没有全局地址），整台机器就永远同步不了。顺带容器也能
+    # 直连路由器，无需额外路由配置。
+    network_mode: host
+
+    volumes:
+      # 会话缓存 + 网页保存的设置（settings.json 里会有明文路由器密码，网页里填过就有）
+      - ./data:/data
+
+    # network_mode: host 时端口直接开在宿主机上，无需 ports 映射；
+    # 若改用 bridge，请把下面两行取消注释。
+    # ports:
+    #   - "6600:6600"              # 浏览器控制台
+    #   - "127.0.0.1:8099:8099"    # 健康检查只在宿主机本地
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

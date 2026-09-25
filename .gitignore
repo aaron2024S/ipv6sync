@@ -1,0 +1,29 @@
+# ── 运行时数据：含路由器密码与会话凭据，绝不能提交 ──
+.env
+data/
+session.json
+settings.json
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── 日志 ──
+*.log
+
+# ── 离线组装产物：体积大、且都能重新生成 ──
+# offline/ 下的脚本（build_offline.py / pack_src.py / validate_*.py / README.md 等）
+# 是要进版本库的；只排除 cache 与 dist 这两个产物目录。
+offline/cache/
+offline/dist/
+offline/boot-run-*/
+dist/
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

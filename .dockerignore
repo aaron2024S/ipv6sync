@@ -1,0 +1,14 @@
+.env
+data/
+*.log
+*.pyc
+__pycache__/
+**/__pycache__/
+.git/
+.gitignore
+tests/
+*.md
+!README.md
+
+# 离线组装用的基础层缓存（几十 MB），不该进 docker build 的上下文
+offline/
