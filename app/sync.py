@@ -12,12 +12,22 @@ import logging
 import threading
 import time
 
-from . import discover, notify, state, trustlist
+from . import discover, events, notify, state, trustlist
 from .config import Config, Rule
 from .router import (AuthFailed, NetworkError, NotLoggedIn, RouterError,
                      SessionExpired)
 
 log = logging.getLogger("ipv6sync.sync")
+
+
+def _truthy(v) -> bool:
+    """固件的开关字段可能是 bool / 1 / "0" / "false" 等各种形态，统一判定。
+
+    注意 bool("0") 是 True，直接 bool() 会把固件用字符串表示的「关」误判成开。
+    """
+    if isinstance(v, bool):
+        return v
+    return str(v or "").strip().lower() not in ("", "0", "false", "off", "no", "none")
 
 
 @dataclasses.dataclass
@@ -62,6 +72,19 @@ class Syncer:
         self.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
         # 本轮实际改动了防火墙配置的描述（变更通知的素材），每轮 tick 开头清空
         self.tick_changes: list[str] = []
+        # 本轮写入的触发来源（修改日志里的「触发」列）：主循环轮询是默认值，
+        # 网页动作（立即同步 / 弹窗添加）在调用 tick 前先改写它。
+        self.trigger = "轮询"
+        # 上一轮观察到的防火墙总开关状态（None = 还没观察过）：用于把「开关
+        # 在路由器端被人为改动」也记进修改日志。网页开关自己记，不靠这里。
+        self._fw_seen = None
+
+    def _log_event(self, action: str, trigger: str | None = None, **ev) -> None:
+        """往修改日志追加一条（文件即数据，见 events.py）。失败不影响同步。"""
+        events.record(self.cfg.state_file,
+                      dict(ev, action=action,
+                           trigger=trigger or self.trigger),
+                      self.cfg.events_max)
 
     # ---------------- 热重配（网页改完设置后调用） ----------------
 
@@ -134,37 +157,43 @@ class Syncer:
             log.error("登录异常：%s", e)
             return False
 
-    # ---------------- 目标地址发现（固定流程，无分支） ----------------
+    # ---------------- 目标地址发现（按规则绑定方式分流，无开关） ----------------
 
-    def resolve_addrs(self, rule: Rule) -> tuple[list[str], str]:
-        """读本机网卡上的全局 IPv6，返回 (地址列表, 来源说明)。
+    def _host_map(self) -> dict:
+        """把 HostInfo 按 MAC（规范化小写）建索引；一次请求供所有设备规则共用。"""
+        by_mac: dict[str, dict] = {}
+        for h in self.router.get("HostInfo") or []:
+            mac = discover.norm_mac(h.get("MACAddress") or "")
+            if mac and mac not in by_mac:
+                by_mac[mac] = h
+        return by_mac
 
-        这是本程序唯一一条取址路径。容器用 host 网络时「本机接口」就是 NAS
-        自己的网卡 —— 那上面的地址才是外部报文真正能落地的地方，也是唯一的
-        地面真值。路由器设备表（HostInfo）**不参与**：它本质是邻居表缓存，
-        更新有延迟，还会留着设备已经不用了的旧地址。
+    def resolve_addrs(self, rule: Rule,
+                      hosts_by_mac: dict | None = None) -> tuple[list[str], str]:
+        """决定这条规则这一轮该写哪些地址，返回 (地址列表, 来源说明)。
 
-        返回的列表可能为空（网卡上没有可用的全局地址）。
+        两条取址路径，按规则有没有绑定设备 MAC 自动分流：
+
+        · 绑了 MAC（网页白名单页添加的规则都绑）：以路由器设备表里该设备的
+          **第一条地址**为准 —— 华为的排序是「最新出现优先」，第一条就是该
+          设备现役的地址，也是路由器自己选设备时会填的那条。设备离线、或
+          表里没有它的记录时本轮跳过，白名单保持不动。
+          该 MAC 恰好是本机（NAS 自己的规则）时再加一道幽灵校验：路由器的
+          设备表是持久档案，可能残留已经废弃的旧地址，而本机就趴在跟前，
+          /proc 的 flags 结果（deprecated/tentative 已过滤）是免费的真值。
+
+        · 没绑 MAC（环境变量来的老规则）：读本机网卡 —— 容器用 host 网络时
+          「本机接口」就是 NAS 自己，那上面的地址是报文真正能落地的地方。
+          temporary 只降排序不过滤，deprecated / tentative 已被丢弃。
         """
+        if rule.mac:
+            return self._resolve_from_router(rule, hosts_by_mac or {})
+
         addrs = discover.local_candidates()
         if not addrs:
             return [], "本机网卡上未发现可用的全局 IPv6"
 
         origin = f"本机网卡 {len(addrs)} 个地址"
-
-        # 配了 TARGET_MAC 就核对一下。MAC 不在本机任何网卡上，说明这条规则
-        # 想管的是**别的设备**，而本程序只会写本机地址 —— 写上去就是错误的
-        # 放行目标。只告警不中断：部署约定就是"只同步本机"，改不改 MAC 是
-        # 用户的事，但必须让他看见。
-        if rule.mac:
-            nm = discover.norm_mac(rule.mac)
-            macs = discover.local_macs()
-            if macs and nm and nm not in macs:
-                origin += "（注意：TARGET_MAC 不是本机网卡）"
-                log.warning(
-                    "%s：配置的 TARGET_MAC=%s 不在本机网卡 %s 上，仍按本机地址"
-                    "写入。若这条规则本意是给另一台设备放行，请把 TARGET_MAC"
-                    "改成这台机器的", rule.name, rule.mac, sorted(macs))
 
         # 隐私临时地址排到后面：它过期就会换，稳定地址（SLAAC / DHCPv6）更耐用。
         # 只影响写入顺序（决定谁占基础条目名 NAS），**不做过滤** —— 临时地址
@@ -176,6 +205,35 @@ class Syncer:
             temp = set()
         return discover.rank_candidates(addrs, temp_suspect=temp), origin
 
+    def _resolve_from_router(self, rule: Rule,
+                             hosts_by_mac: dict) -> tuple[list[str], str]:
+        """设备规则：路由器设备表里该 MAC 的第一条地址。"""
+        nm = discover.norm_mac(rule.mac)
+        host = hosts_by_mac.get(nm)
+        if host is None:
+            return [], ("路由器设备表里没有该 MAC 的记录"
+                        "（路由器刚重启、表还没重建时会这样，本轮跳过）")
+        # 只有固件明确报「离线」才跳过；字段缺失（个别固件不带）不能当成离线，
+        # 否则一台正常设备会因为假路由器/异形响应被永远晾着。
+        if "Active" in host and not _truthy(host.get("Active")):
+            return [], "设备当前离线 —— 本轮跳过，白名单保持不动"
+        cands = discover.host_candidates(host)
+        if not cands:
+            return [], "路由器还没观察到该设备的全局 IPv6（本轮跳过）"
+        # 幽灵校验：只对「规则指向的设备就是本机」的规则做 —— /proc 就在手边，
+        # 路由器残留的旧地址（设备换过地址后表里还挂着的）绝不能写进白名单。
+        try:
+            if nm in discover.local_macs():
+                local = set(discover.local_candidates())
+                if local and cands[0] not in local:
+                    log.warning("%s：路由器报的第一条地址 %s 不在本机网卡上"
+                                "（残留旧地址），本轮跳过", rule.name, cands[0])
+                    return [], "路由器第一条地址与本机网卡不符（残留旧地址），本轮跳过"
+        except OSError as e:  # noqa: BLE001
+            log.debug("读本机网卡信息失败，跳过幽灵校验：%s", e)
+        dev_name = host.get("HostName") or host.get("ActualName") or nm
+        return cands[:1], f"路由器设备表「{dev_name}」第 1 条地址"
+
     # ---------------- 单条规则同步 ----------------
 
     @staticmethod
@@ -186,13 +244,14 @@ class Syncer:
         parts.append("; ".join(results))
         return " | ".join(p for p in parts if p)
 
-    def sync_rule(self, rule: Rule) -> RuleState:
+    def sync_rule(self, rule: Rule, hosts_by_mac: dict | None = None) -> RuleState:
         st = self.states[rule.name]
-        addrs, origin = self.resolve_addrs(rule)
+        addrs, origin = self.resolve_addrs(rule, hosts_by_mac)
         if not addrs:
+            # 取不到地址（离线/空表/幽灵地址）= 本轮跳过，属正常运行节奏
             st.update(addr=None, addrs=[], action="skip",
                       detail=origin, error="no-address")
-            log.warning("%s：%s —— 容器是 host 网络吗？", rule.name, origin)
+            log.info("%s：%s", rule.name, origin)
             return st
 
         try:
@@ -251,6 +310,9 @@ class Syncer:
         # 先删多余的（端口缩容 / 地址减少），顺带把名额腾出来给下面要新增的条目。
         # 只删"名字看起来是本程序生成的"那些，用户手工加的条目一个都不动。
         keep = {nm for nm, _a, _p in desired}
+        # 删除前先记下旧条目的地址/端口：修改日志里要能看出"删掉的是什么"
+        old_by_name = {e.get("Name"): (e.get("LocalIp") or "", e.get("Port"))
+                       for e in existing}
         try:
             gone = trustlist.remove_stale(self.router, rule.name, keep)
             if gone:
@@ -258,6 +320,11 @@ class Syncer:
                 wrote += len(gone)
                 # 删条目也是真的改动了设备配置，累计里要算上
                 self.counters.bump(removed=len(gone))
+                for nm in gone:
+                    oa, op = old_by_name.get(nm, ("", ""))
+                    self._log_event("removed", device=rule.name,
+                                    mac=rule.mac or "", entry=nm,
+                                    addr=oa, port=op)
         except RouterError as e:
             log.warning("%s：清理过期条目失败：%s", rule.name, e)
 
@@ -283,6 +350,12 @@ class Syncer:
             wrote += 1
             n_created += action == "created"
             n_updated += action == "updated"
+            # 修改日志：地址更新要带上旧地址（更新列显示 旧 → 新）
+            self._log_event(action, device=rule.name, mac=rule.mac or "",
+                            entry=nm, addr=a,
+                            old_addr=(cur.get("LocalIp") or "")
+                            if action == "updated" else "",
+                            port=p, remote_ip=rule.remote_ip or "::/0")
             back = trustlist.find_by_name(self.router, nm)
             # 回读校验同样按规范化地址比：固件把地址存成另一种写法不代表没保存
             if self.cfg.verify_after_write and not (
@@ -347,19 +420,42 @@ class Syncer:
             # IPv6 防火墙总开关（默认不动用户的配置）
             enabled = trustlist.is_enabled(self.router)
             self.firewall_on = enabled
+            # 开关在路由器端被人为改动（不是网页、也不是自动打开）→ 记一条。
+            # 首轮只记基准不记事件，避免每次重启都多一条无意义记录。
+            if self._fw_seen is not None and enabled != self._fw_seen:
+                self._log_event("fw", trigger="路由器端",
+                                device="（全局）", entry="—",
+                                addr="总开关已开启" if enabled
+                                else "总开关已关闭（进入待机）", port="")
+            self._fw_seen = enabled
             if not enabled:
                 if self.cfg.ensure_firewall_on:
                     log.warning("IPv6 防火墙当前是关闭的，白名单不会生效 —— 正在打开")
                     trustlist.set_enabled(self.router, True)
                     self.firewall_on = True
                     self.tick_changes.append("IPv6 防火墙总开关已自动打开")
+                    self._log_event("fw", trigger="自动打开",
+                                    device="（全局）", entry="—",
+                                    addr="总开关已自动打开（ENSURE_FIREWALL_ON）",
+                                    port="")
+                    self._fw_seen = True
                 else:
-                    log.warning("IPv6 防火墙当前是关闭的，白名单不会生效"
+                    # 总开关关闭 = 白名单整体不生效。本轮只观察不写入：
+                    # 地址照旧在变，写上去的条目却不起作用，纯属浪费 flash。
+                    # 开关重新打开后，下一轮自动恢复同步并把地址追平。
+                    log.warning("IPv6 防火墙当前是关闭的 —— 本轮跳过同步"
                                 "（如需自动打开请设 ENSURE_FIREWALL_ON=true）")
+                    self.consecutive_failures = 0
+                    self.last_error = None
+                    self.last_ok = True
+                    self.last_success_at = self.last_tick_at
+                    return self.snapshot(ok=True)
 
+            # 设备表一次拉取、所有设备规则共用（每规则各拉一次太浪费）
+            hosts_by_mac = self._host_map()
             for rule in self.cfg.rules:
                 try:
-                    self.sync_rule(rule)
+                    self.sync_rule(rule, hosts_by_mac)
                 except (NotLoggedIn, SessionExpired) as e:
                     log.warning("会话在同步 %s 时失效，稍后重登：%s", rule.name, e)
                     raise

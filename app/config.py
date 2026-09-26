@@ -147,6 +147,9 @@ class Config:
     # 跨容器重启的累计计数（新增/更新/删除条目数）。放在挂载卷里，
     # 否则每次重启「累计写入」都归零，用户没法判断到底同步过没有。
     state_file: str = "/data/state.json"
+    # 同步记录保留条数（/data/events.jsonl 超出丢弃最旧）。
+    # 不在设置表单里露出 —— 只在「同步记录」页的工具行里调。
+    events_max: int = 100
 
     @property
     def base_url(self) -> str:
@@ -255,6 +258,7 @@ def load_config(argv: list[str] | None = None) -> Config:
         web_session_ttl=_env_int("WEB_SESSION_TTL", 12 * 3600),
         settings_file=settings_file,
         state_file=_env("STATE_FILE", "") or _default_state_file(settings_file),
+        events_max=max(10, min(5000, _env_int("LOG_MAX", 100))),
     )
 
     # 通知渠道的字段合法性由网页设置层校验（URL 格式 / 机器人 ID），这里不再拦截
@@ -305,13 +309,16 @@ HELP = """\
 华为路由器 IPv6 防火墙白名单动态同步
 
 工作方式（固定，没有可选分支）:
-  每 POLL_INTERVAL 秒读一次**本机网络接口**上的全局 IPv6，与路由器 IPv6
-  防火墙白名单里本程序维护的那些条目比对，**有变化才更新**（地址没变就不
-  碰设备，避免无谓的 flash 写入）。
-  所以容器**必须用 host 网络**（network_mode: host）—— 否则读到的是容器
-  自己的网卡，与本机无关。本机网卡上有几个全局地址就写几条白名单条目
-  （条目名 NAS / NAS@2 …）—— 白名单是按「目的地址」匹配的，只写一条等于
-  赌固件给的顺序。
+  每条白名单规则按其绑定方式取址，与路由器 IPv6 防火墙白名单里本程序维护
+  的条目比对，**有变化才更新**（地址没变就不碰设备，避免无谓的 flash 写入）：
+  · 绑定设备 MAC 的规则（网页控制台白名单页添加）：取路由器设备表（HostInfo）
+    里该设备的**第一条地址** —— 华为的排序是「最新出现优先」，第一条就是该
+    设备现役的地址，也是路由器自己选设备时会填的那条。设备离线或表里没有
+    它时本轮跳过、保持白名单不动。
+  · 未绑定 MAC 的规则（环境变量来的老配置）：读本机网络接口上的全局 IPv6
+    （容器必须 host 网络），deprecated / tentative 已被 flags 过滤。
+  环境变量里旧的 ENTRY_NAME / PORT / REMOTE_IP / TARGET_MAC 仍可用，
+  首次读取时自动迁移成规则列表（也持久化进 settings.json 的 RULES）。
 
 环境变量（核心）:
   ROUTER_HOST            路由器地址，默认 192.168.3.1
@@ -323,8 +330,10 @@ HELP = """\
   ENTRY_PORT             放行端口；留空或 -1 = 全部端口，多个用英文逗号分隔
                          （如 16667,5005，每端口生成一条条目：NAS、NAS-5005…）
                          注意不是 PORT —— PORT 是控制台端口（见文件末尾）
+                         【以上条目类变量推荐改用网页控制台的白名单页按设备添加】
   REMOTE_IP              允许来源，默认 ::/0（不限制）
-  TARGET_MAC             目标设备 MAC（可选，用来核对这条规则确实指向本机）
+  TARGET_MAC             目标设备 MAC（可选）；填了就把这条规则改为「按设备」
+                         跟随路由器设备表维护，不填则读本机网卡
   POLL_INTERVAL          轮询秒数，默认 60
   ENSURE_FIREWALL_ON     是否自动打开 IPv6 防火墙开关，默认 false
   DRY_RUN                只打印不写入

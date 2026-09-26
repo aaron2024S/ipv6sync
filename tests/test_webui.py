@@ -19,6 +19,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import settings as st          # noqa: E402
+from app import discover                # noqa: E402
 from app.config import Config, Rule, load_config   # noqa: E402
 from app.node import Node               # noqa: E402
 from app.router import AuthFailed       # noqa: E402
@@ -146,14 +147,29 @@ class SettingsPrecedenceTest(EnvSandbox):
         self.assertEqual(cfg.host, "10.0.0.9")
         self.assertEqual(cfg.poll_interval, 45)
 
-    def test_overlay_targets_first_rule(self):
+    def test_legacy_entry_settings_migrate_to_rules(self):
+        # 旧版把单条规则摊在 ENTRY_NAME / PORT / REMOTE_IP / TARGET_MAC 四个键里，
+        # 这些键已从表单下线，但读取时必须迁移成 RULES，不能把用户配置弄丢
         st.save_overlay({"ENTRY_NAME": "MYNAS", "PORT": "8443",
-                         "REMOTE_IP": "2001:db8::/32"}, self.settings_file)
+                         "REMOTE_IP": "2001:db8::/32",
+                         "TARGET_MAC": "AA:BB:CC:DD:EE:FF"}, self.settings_file)
+        ov = st.load_overlay(self.settings_file)
+        self.assertEqual(ov["RULES"][0]["name"], "MYNAS")
+        self.assertEqual(ov["RULES"][0]["port"], "8443")
+        self.assertEqual(ov["RULES"][0]["mac"], "AA:BB:CC:DD:EE:FF")
         cfg = load_config([])
         r = cfg.rules[0]
         self.assertEqual(r.name, "MYNAS")
         self.assertEqual(r.port, 8443)
         self.assertEqual(r.remote_ip, "2001:db8::/32")
+        self.assertEqual(r.mac, "AA:BB:CC:DD:EE:FF")
+
+    def test_removed_target_mac_field_migrates_alone(self):
+        # 用户只在旧版填过 TARGET_MAC：也要迁移出一条规则（读本机网卡的老路径）
+        st.save_overlay({"TARGET_MAC": "aa:bb:cc:dd:ee:ff"}, self.settings_file)
+        ov = st.load_overlay(self.settings_file)
+        self.assertEqual(ov["RULES"][0]["mac"], "aa:bb:cc:dd:ee:ff")
+        self.assertEqual(load_config([]).rules[0].mac, "aa:bb:cc:dd:ee:ff")
 
     def test_port_minus_one_means_all(self):
         st.save_overlay({"PORT": "-1"}, self.settings_file)
@@ -201,12 +217,11 @@ class NodeReconfigureTest(EnvSandbox):
     def test_save_applies_and_persists(self):
         node = Node(load_config([]))
         res = node.save_settings({"ROUTER_HOST": "10.0.0.9", "POLL_INTERVAL": 30,
-                                  "DRY_RUN": True, "ENTRY_NAME": "MYNAS"})
+                                  "DRY_RUN": True})
         # 内存里立刻生效
         self.assertEqual(node.cfg.host, "10.0.0.9")
         self.assertEqual(node.cfg.poll_interval, 30)
         self.assertTrue(node.cfg.dry_run)
-        self.assertEqual(node.cfg.rules[0].name, "MYNAS")
         # 同步器也换到了新配置上（不是只改了 Node 的副本）
         self.assertIs(node.syncer.cfg, node.cfg)
         self.assertIs(node.syncer.router, node.router)
@@ -334,7 +349,10 @@ class FakeNode:
 
     def whitelist(self):
         return {"ok": True, "enabled": True, "max": 32,
-                "entries": self.router.get("ip6firewall_trustlist")}
+                "entries": self.router.get("ip6firewall_trustlist"),
+                "rules": [{"name": "NAS", "mac": "00:11:22:aa:bb:cc",
+                           "port": "全部", "remote_ip": "::/0"}],
+                "hosts": self.hosts()["hosts"]}
 
     def hosts(self):
         return {"ok": True, "hosts": [{"mac": "00:11:22:AA:BB:CC",
@@ -348,6 +366,34 @@ class FakeNode:
 
     def set_firewall(self, on):
         return {"ok": True, "enabled": on}
+
+    def reset_counters(self):
+        self.saved.append({"action": "reset_counters"})
+        return {"ok": True, "counters": {"total_writes": 0}}
+
+    def events_list(self):
+        return {"ok": True, "events": [], "max": self.cfg.events_max}
+
+    def events_clear(self):
+        return {"ok": True}
+
+    def set_events_max(self, value):
+        self.cfg.events_max = int(value)
+        return {"ok": True, "max": self.cfg.events_max}
+
+    def rules_api(self, data):
+        self.saved.append(data)
+        if data.get("action") == "add" and not data.get("mac"):
+            return {"ok": False, "error": "必须选择一台设备"}
+        return {"ok": True, "notes": ["已保存并立即同步"]}
+
+    def delete_whitelist_entry(self, data):
+        self.saved.append({"action": "delete_entry", **data})
+        return {"ok": True}
+
+    def update_whitelist_entry(self, data):
+        self.saved.append({"action": "update_entry", **data})
+        return {"ok": True}
 
 
 def call(base, path, method="GET", body=None, cookie=None, origin=None,
@@ -599,6 +645,11 @@ class WebUITest(unittest.TestCase):
                           {"enable": True}, cookie=cookie)
         self.assertEqual((code, j["ok"]), (200, True))
 
+        code, j, _ = call(self.base, "/api/counters/reset", "POST", {},
+                          cookie=cookie)
+        self.assertEqual((code, j["ok"]), (200, True))
+        self.assertEqual(j["counters"]["total_writes"], 0)
+
         code, j, _ = call(self.base, "/api/sync", "POST", {}, cookie=cookie)
         self.assertEqual((code, j["ok"]), (200, True))
 
@@ -610,6 +661,35 @@ class WebUITest(unittest.TestCase):
         self.assertTrue(j["ok"])
         self.assertEqual(self.node.saved[-1], patch)
         self.assertEqual(j["notes"], ["测试备注"])
+
+    def test_rules_api_round_trip(self):
+        cookie = self.login()
+        code, j, _ = call(self.base, "/api/rules", "POST",
+                          {"action": "add", "name": "DX",
+                           "mac": "00:11:22:AA:BB:CC", "port": "16669"},
+                          cookie=cookie)
+        self.assertEqual((code, j["ok"]), (200, True))
+        self.assertEqual(self.node.saved[-1]["action"], "add")
+        # 校验失败走 400
+        code, j, _ = call(self.base, "/api/rules", "POST",
+                          {"action": "add", "name": "X", "mac": ""},
+                          cookie=cookie)
+        self.assertEqual(code, 200)
+        self.assertFalse(j["ok"])
+
+    def test_manual_entry_delete_and_update(self):
+        cookie = self.login()
+        code, j, _ = call(self.base, "/api/router/whitelist/delete", "POST",
+                          {"id": "x.1."}, cookie=cookie)
+        self.assertEqual((code, j["ok"]), (200, True))
+        code, j, _ = call(self.base, "/api/router/whitelist/update", "POST",
+                          {"id": "x.1.", "name": "改名",
+                           "local_ip": "240e:3a4::bb", "port": "-1"},
+                          cookie=cookie)
+        self.assertEqual((code, j["ok"]), (200, True))
+        acts = [d.get("action") for d in self.node.saved]
+        self.assertIn("delete_entry", acts)
+        self.assertIn("update_entry", acts)
 
     def test_save_settings_validation_error_is_400(self):
         cookie = self.login()
@@ -859,6 +939,294 @@ class NodeHostsTest(EnvSandbox):
         # 空响应
         self.assertEqual(_parse_blacklist(None), [])
         self.assertEqual(_parse_blacklist({}), [])
+
+
+class RulesOverlayTest(EnvSandbox):
+    """RULES：网页白名单页维护的规则列表，存 overlay、应用成 Config.rules。"""
+
+    def test_rules_round_trip(self):
+        st.save_overlay({"RULES": [{"name": "NAS", "mac": "aa:bb:cc:dd:ee:ff",
+                                    "port": "16669", "remote_ip": "::/0"},
+                                   {"name": "盒子", "mac": "11:22:33:44:55:66",
+                                    "port": "-1", "remote_ip": "::/0"}]},
+                        self.settings_file)
+        cfg = load_config([])
+        self.assertEqual(len(cfg.rules), 2)
+        r0 = cfg.rules[0]
+        self.assertEqual((r0.name, r0.mac, r0.port, r0.remote_ip),
+                         ("NAS", "aa:bb:cc:dd:ee:ff", 16669, "::/0"))
+        self.assertIsNone(cfg.rules[1].port)          # -1 → 全部端口
+
+    def test_rules_beat_env_rules(self):
+        os.environ["ENTRY_NAME"] = "FROM-ENV"
+        try:
+            st.save_overlay({"RULES": [{"name": "FROM-WEB",
+                                        "mac": "aa:bb:cc:dd:ee:ff"}]},
+                            self.settings_file)
+            names = [r.name for r in load_config([]).rules]
+            self.assertEqual(names, ["FROM-WEB"],
+                             "网页规则应整体替换环境变量规则，避免两处真相打架")
+        finally:
+            os.environ.pop("ENTRY_NAME", None)
+
+    def test_rules_bad_port_rejected(self):
+        with self.assertRaises(st.SettingsError):
+            st.validate_overlay({"RULES": [{"name": "X", "mac": "aa",
+                                            "port": "99999"}]})
+
+    def test_rules_duplicate_name_rejected(self):
+        with self.assertRaises(st.SettingsError):
+            st.validate_overlay({"RULES": [{"name": "A", "mac": "aa"},
+                                           {"name": "A", "mac": "bb"}]})
+
+    def test_rules_bad_remote_rejected(self):
+        with self.assertRaises(st.SettingsError):
+            st.validate_overlay({"RULES": [{"name": "A", "mac": "aa",
+                                            "remote_ip": "not-an-ip"}]})
+
+
+class DeviceRuleSyncTest(unittest.TestCase):
+    """设备规则：取路由器设备表第一条地址，离线/空表/幽灵地址时跳过。"""
+
+    class FakeR:
+        def __init__(self, hosts=None):
+            self.logged_in = True
+            self.entries = []
+            self.hosts = hosts if hosts is not None else [
+                {"MACAddress": "AA:BB:CC:DD:EE:FF", "HostName": "NAS机",
+                 "Active": 1,
+                 "Ipv6Addrs": [{"Ipv6Addr": "240E:3A4::AA"}]},
+            ]
+
+        def check_session(self):
+            return True
+
+        def get(self, name, params=None):
+            if name == "ip6firewall_enable":
+                return {"Enable": True}
+            if name == "ip6firewall_trustlist":
+                return self.entries
+            if name == "HostInfo":
+                return self.hosts
+            raise AssertionError(name)
+
+        def post(self, name, data=None, wrapped=True, action=None):
+            if name == "ip6firewall_enable":
+                return {}
+            if name == "ip6firewall_trustlist":
+                if action == "create":
+                    e = dict(data)
+                    e["ID"] = f"t.{len(self.entries) + 1}"
+                    self.entries.append(e)
+                    return {}
+                if action == "update":
+                    for e in self.entries:
+                        if e.get("ID") == data.get("ID"):
+                            e.update({k: v for k, v in data.items() if k != "ID"})
+                            return {}
+                    raise AssertionError("update 目标不存在")
+                if action == "delete":
+                    self.entries = [e for e in self.entries
+                                    if e.get("ID") != data.get("ID")]
+                    return {}
+            raise AssertionError((name, action))
+
+    def make(self, hosts=None):
+        cfg = Config(host="192.168.3.1", username="admin", password="x",
+                     session_file=None,
+                     rules=[Rule(name="NAS", port=16669,
+                                 mac="AA:BB:CC:DD:EE:FF")],
+                     state_file=os.path.join(
+                         tempfile.mkdtemp(prefix="ipv6sync-devrule-"),
+                         "state.json"))
+        router = self.FakeR(hosts)
+        return Syncer(cfg, router), router
+
+    def test_writes_first_address_normalized(self):
+        s, router = self.make()
+        snap = s.tick()
+        self.assertTrue(snap["ok"])
+        self.assertEqual(len(router.entries), 1)
+        self.assertEqual(router.entries[0]["Name"], "NAS")
+        self.assertEqual(router.entries[0]["LocalIp"], "240e:3a4::aa",
+                         "固件给的大写/未压缩写法要规范化后写入")
+        self.assertEqual(s.counters.snapshot()["created"], 1)
+
+    def test_address_change_updates_in_place(self):
+        s, router = self.make()
+        s.tick()
+        router.hosts[0]["Ipv6Addrs"] = [{"Ipv6Addr": "240e:3a4::bb"}]
+        s.tick()
+        self.assertEqual(len(router.entries), 1, "原地更新，不新增条目")
+        self.assertEqual(router.entries[0]["LocalIp"], "240e:3a4::bb")
+        self.assertEqual(s.counters.snapshot()["updated"], 1)
+
+    def test_offline_device_skips(self):
+        hosts = [{"MACAddress": "AA:BB:CC:DD:EE:FF", "HostName": "NAS机",
+                  "Active": "0", "Ipv6Addrs": [{"Ipv6Addr": "240e:3a4::aa"}]}]
+        s, router = self.make(hosts)
+        s.tick()
+        self.assertEqual(router.entries, [], "离线设备不动白名单")
+        self.assertEqual(s.states["NAS"].action, "skip")
+        self.assertIn("离线", s.states["NAS"].detail)
+
+    def test_empty_hostinfo_skips(self):
+        s, router = self.make(hosts=[])
+        s.tick()
+        self.assertEqual(router.entries, [], "路由器表没重建时绝不动作（防误删）")
+        self.assertIn("没有该 MAC", s.states["NAS"].detail)
+
+    def test_ghost_address_skipped_for_local_device(self):
+        s, router = self.make(hosts=[
+            {"MACAddress": "AA:BB:CC:DD:EE:FF", "HostName": "NAS机",
+             "Active": 1, "Ipv6Addrs": [{"Ipv6Addr": "240e:3a4::dead"}]}])
+        orig_macs, orig_cands = discover.local_macs, discover.local_candidates
+        discover.local_macs = lambda: {"aabbccddeeff"}
+        discover.local_candidates = lambda: ["240e:3a4::aa"]
+        try:
+            s.tick()
+        finally:
+            discover.local_macs = orig_macs
+            discover.local_candidates = orig_cands
+        self.assertEqual(router.entries, [], "本机设备的幽灵地址不能写进白名单")
+        self.assertIn("残留旧地址", s.states["NAS"].detail)
+
+    def test_multi_port_spec_expands_entries(self):
+        cfg = Config(host="192.168.3.1", username="admin", password="x",
+                     session_file=None,
+                     rules=[Rule(name="NAS", port="16669,5005",
+                                 mac="AA:BB:CC:DD:EE:FF")])
+        router = self.FakeR()
+        s = Syncer(cfg, router)
+        s.tick()
+        self.assertEqual([e["Name"] for e in router.entries], ["NAS", "NAS-5005"])
+
+
+class RulesApiTest(EnvSandbox):
+    """Node.rules_api：增/改/删规则并立即收敛，remove 连旧条目一起删。"""
+
+    class FakeR(DeviceRuleSyncTest.FakeR):
+        pass
+
+    def make_node(self, hosts=None):
+        node = Node.__new__(Node)
+        node.settings_file = self.settings_file
+        node.cfg = Config(host="192.168.3.1", username="admin", password="x",
+                          session_file=None, rules=[],
+                          state_file=os.path.join(self.tmp.name, "state.json"))
+        node.overlay = {}
+        node._lock = threading.RLock()
+        router = self.FakeR(hosts)
+        node.router = router
+        node.syncer = Syncer(node.cfg, router)
+        return node, router
+
+    def test_add_rule_persists_and_writes_router(self):
+        node, router = self.make_node()
+        res = node.rules_api({"action": "add", "name": "DX4600",
+                              "mac": "AA:BB:CC:DD:EE:FF", "port": "16669"})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(node.cfg.rules[0].name, "DX4600")
+        self.assertEqual(router.entries[0]["Name"], "DX4600")
+        with open(self.settings_file, encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["RULES"][0]["name"], "DX4600")
+
+    def test_add_requires_device(self):
+        node, _ = self.make_node()
+        res = node.rules_api({"action": "add", "name": "X", "mac": ""})
+        self.assertFalse(res["ok"])
+        self.assertIn("设备", res["error"])
+
+    def test_add_duplicate_name_rejected(self):
+        node, _ = self.make_node()
+        self.assertTrue(node.rules_api(
+            {"action": "add", "name": "A", "mac": "AA:BB:CC:DD:EE:FF"})["ok"])
+        res = node.rules_api({"action": "add", "name": "A",
+                              "mac": "AA:BB:CC:DD:EE:FF"})
+        self.assertFalse(res["ok"])
+        self.assertIn("同名", res["error"])
+
+    def test_rename_removes_old_entries(self):
+        node, router = self.make_node()
+        self.assertTrue(node.rules_api(
+            {"action": "add", "name": "OLD", "mac": "AA:BB:CC:DD:EE:FF"})["ok"])
+        self.assertEqual(len(router.entries), 1)
+        res = node.rules_api({"action": "update", "old_name": "OLD",
+                              "name": "NEW", "mac": "AA:BB:CC:DD:EE:FF"})
+        self.assertTrue(res["ok"], res)
+        names = [e["Name"] for e in router.entries]
+        self.assertEqual(names, ["NEW"], "改名后旧名字条目要删掉")
+
+    def test_remove_rule_also_deletes_entries(self):
+        node, router = self.make_node()
+        self.assertTrue(node.rules_api(
+            {"action": "add", "name": "NAS", "mac": "AA:BB:CC:DD:EE:FF"})["ok"])
+        self.assertEqual(len(router.entries), 1)
+        res = node.rules_api({"action": "remove", "name": "NAS"})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(router.entries, [],
+                         "删除规则必须连条目一起删，否则下轮又被写回")
+        self.assertEqual(node.cfg.rules, [])
+
+    def test_delete_manual_entry(self):
+        node, router = self.make_node()
+        router.entries = [{"Name": "手工条目", "LocalIp": "240e:3a4::aa",
+                           "RemoteIp": "::/0", "Port": 22, "ID": "x.1."}]
+        res = node.delete_whitelist_entry({"id": "x.1."})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(router.entries, [])
+
+    def test_update_manual_entry(self):
+        node, router = self.make_node()
+        router.entries = [{"Name": "手工条目", "LocalIp": "240e:3a4::aa",
+                           "RemoteIp": "::/0", "Port": 22, "ID": "x.1."}]
+        res = node.update_whitelist_entry({"id": "x.1.", "name": "改名",
+                                           "local_ip": "240e:3a4::bb",
+                                           "remote_ip": "::/0", "port": "-1"})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(router.entries[0]["Name"], "改名")
+        self.assertEqual(router.entries[0]["LocalIp"], "240e:3a4::bb")
+
+    def test_manual_ops_leave_event_log(self):
+        """手工删/改条目（网页操作）也要进修改日志，触发来源标「网页操作」。"""
+        from app import events
+        node, router = self.make_node()
+        router.entries = [{"Name": "手工条目", "LocalIp": "240e:3a4::aa",
+                           "RemoteIp": "::/0", "Port": 22, "ID": "x.1."}]
+        node.delete_whitelist_entry({"id": "x.1."})
+        got = events.read(node.cfg.state_file)
+        self.assertEqual([g["action"] for g in got], ["removed"])
+        self.assertEqual(got[0]["trigger"], "网页操作")
+        self.assertEqual(got[0]["addr"], "240e:3a4::aa")
+
+    def test_set_events_max_persists_and_trims(self):
+        """改保留上限：落盘 settings.json（LOG_MAX）并立即按新上限裁剪。"""
+        from app import events
+        node, _router = self.make_node()
+        for i in range(15):
+            events.record(node.cfg.state_file, {"device": "d",
+                                                "addr": f"240e::{i}"}, 500)
+        res = node.set_events_max(10)
+        self.assertTrue(res["ok"])
+        self.assertEqual(node.cfg.events_max, 10)
+        got = events.read(node.cfg.state_file)
+        self.assertEqual(len(got), 10)
+        self.assertEqual(got[0]["addr"], "240e::5")     # 最旧的 5 条被丢
+        # LOG_MAX 落盘且不出现在设置表单里（hidden）
+        from app import settings as st
+        ov = st.load_overlay(node.settings_file)
+        self.assertEqual(ov.get("LOG_MAX"), 10)
+        groups = st.view(node.cfg, ov)
+        keys = {f["key"] for g in groups for f in g["fields"]}
+        self.assertNotIn("LOG_MAX", keys)
+
+    def test_set_events_max_rejects_bad_value(self):
+        node, _router = self.make_node()
+        with self.assertRaises(st.SettingsError):
+            node.set_events_max("abc")
+        with self.assertRaises(st.SettingsError):
+            node.set_events_max(99999)
 
 
 if __name__ == "__main__":

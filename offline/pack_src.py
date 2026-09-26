@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 try:                                     # 版本号跟 app/__init__.py 保持一致
     m = re.search(r'__version__\s*=\s*"([^"]+)"',
                   (ROOT / "app" / "__init__.py").read_text(encoding="utf-8"))

@@ -238,6 +238,23 @@ class WebUI:
                     return handler.send_json(
                         {"ok": False, "error": "enable 必须是 true/false"}, 400)
                 return handler.send_json(self.node.set_firewall(want))
+            if method == "POST" and route == "/api/counters/reset":
+                return handler.send_json(self.node.reset_counters())
+            if method == "GET" and route == "/api/events":
+                return handler.send_json(self.node.events_list())
+            if method == "POST" and route == "/api/events/clear":
+                return handler.send_json(self.node.events_clear())
+            if method == "POST" and route == "/api/events/max":
+                return handler.send_json(self.node.set_events_max(
+                    _json_body(body).get("max")))
+            if method == "POST" and route == "/api/rules":
+                return handler.send_json(self.node.rules_api(_json_body(body)))
+            if method == "POST" and route == "/api/router/whitelist/delete":
+                return handler.send_json(
+                    self.node.delete_whitelist_entry(_json_body(body)))
+            if method == "POST" and route == "/api/router/whitelist/update":
+                return handler.send_json(
+                    self.node.update_whitelist_entry(_json_body(body)))
             if method == "POST" and route == "/api/notify/test":
                 return handler.send_json(self.node.test_notify())
         except st.SettingsError as e:

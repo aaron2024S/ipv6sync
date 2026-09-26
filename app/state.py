@@ -83,6 +83,13 @@ class Counters:
 
     # ---------------- 写 ----------------
 
+    def reset(self) -> None:
+        """全部清零（网页「重置累计写入」用）。落盘交给调用方 flush()。"""
+        self.created = self.updated = self.removed = 0
+        self.session_created = self.session_updated = self.session_removed = 0
+        self.first_write_at = self.last_write_at = ""
+        self._dirty = True
+
     def bump(self, created: int = 0, updated: int = 0, removed: int = 0) -> None:
         """记一次真实发生过的写入 / 删除。只动内存，落盘交给 flush()。"""
         created = max(0, int(created or 0))

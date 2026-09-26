@@ -21,7 +21,7 @@ PAGE = r"""<!DOCTYPE html>
   --bg:#f5f6f8; --card:#fff; --line:#e3e6ea; --text:#1f2328; --muted:#6b7280;
   --accent:#2563eb; --accent-weak:#eff4ff; --ok:#12805c; --ok-bg:#e8f6f0;
   --warn:#9a6700; --warn-bg:#fff8e5; --err:#b42318; --err-bg:#fdeceb;
-  --radius:10px;
+  --btn-line:#e3e6ea; --radius:10px;
 }
 /* 手动深色：页面右上角切换按钮设置 data-theme="dark" 时强制深色 */
 :root[data-theme="dark"]{
@@ -29,6 +29,7 @@ PAGE = r"""<!DOCTYPE html>
   --muted:#9aa1ab; --accent:#6ea8fe; --accent-weak:#1d2735;
   --ok:#4ec9a0; --ok-bg:#16261f; --warn:#e3b341; --warn-bg:#2a2416;
   --err:#f0837a; --err-bg:#2b1b1a;
+  --btn-line:#464d57;
 }
 /* 自动模式：跟随系统，但用户手动选了浅色时不覆盖 */
 @media (prefers-color-scheme: dark){
@@ -37,6 +38,7 @@ PAGE = r"""<!DOCTYPE html>
     --muted:#9aa1ab; --accent:#6ea8fe; --accent-weak:#1d2735;
     --ok:#4ec9a0; --ok-bg:#16261f; --warn:#e3b341; --warn-bg:#2a2416;
     --err:#f0837a; --err-bg:#2b1b1a;
+    --btn-line:#464d57;
   }
 }
 *{box-sizing:border-box}
@@ -59,7 +61,7 @@ input[type=text],input[type=password],input[type=number],select{
 input:focus,select:focus{outline:none;border-color:var(--accent);
   box-shadow:0 0 0 3px var(--accent-weak)}
 button{font-family:inherit;font-size:13.5px;padding:9px 15px;border-radius:8px;
-  border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
+  border:1px solid var(--btn-line);background:var(--card);color:var(--text);cursor:pointer}
 button:hover{border-color:var(--accent);color:var(--accent)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button.primary:hover{filter:brightness(1.06);color:#fff}
@@ -94,6 +96,8 @@ header.top .spacer{flex:1}
 .card h2{font-size:14px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
 .card h2 .n{color:var(--muted);font-weight:400;font-size:12.5px}
 .card h2 .hbtn{margin-left:auto;padding:5px 12px;font-size:12.5px}
+.card h2 .hbtns{margin-left:auto;display:flex;gap:8px}
+.card h2 .hbtns .hbtn{margin-left:0}
 .card .desc{color:var(--muted);font-size:12.5px;margin:0 0 14px}
 .card ul.desc{padding-left:18px;margin:0 0 8px}
 .card ul.desc li{margin:0 0 7px}
@@ -118,12 +122,32 @@ code{background:var(--accent-weak);padding:1px 6px;border-radius:4px;font-size:1
 .switch{display:flex;align-items:center;gap:9px;height:37px}
 .switch input{width:16px;height:16px;accent-color:var(--accent)}
 .toolbar{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px}
+.fwtoggle{margin-left:auto;display:flex;align-items:center;gap:8px;padding:5px 10px;
+  border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.fwtoggle>span{font-size:12.5px;color:var(--muted)}
+.fwtoggle>b{font-size:12.5px}
+.swbtn{position:relative;width:42px;height:23px;border-radius:12px;background:#c0c4ca;
+  border:none;cursor:pointer;padding:0;transition:background .15s}
+.swbtn::after{content:"";position:absolute;top:2px;left:2px;width:19px;height:19px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:left .15s}
+.swbtn.on{background:var(--ok)}
+.swbtn.on::after{left:21px}
+.swbtn:disabled{opacity:.6;cursor:wait}
 pre.out{background:var(--bg);border:1px solid var(--line);border-radius:8px;
   padding:12px;font-size:12px;line-height:1.55;max-height:300px;overflow:auto;
   white-space:pre-wrap;word-break:break-all;margin:0;font-family:ui-monospace,
   SFMono-Regular,Menlo,Consolas,monospace}
 /* 表格套一层横向滚动容器：手机上窄屏放不下时整体横滑，不换行、不撑出卡片 */
 .tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* 同步记录页 */
+.evq{flex:1;min-width:150px;padding:7px 10px;font-size:12.5px}
+#evAct,#evMax{width:auto;padding:7px 8px;font-size:12.5px}
+.evbadge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px}
+.ev-new{background:var(--ok-bg);color:var(--ok)}
+.ev-upd{background:var(--accent-weak);color:var(--accent)}
+.ev-del{background:var(--err-bg);color:var(--err)}
+.ev-fw{background:var(--warn-bg);color:var(--warn)}
+.evold{color:var(--muted)}
 table{border-collapse:collapse;font-size:12.5px;min-width:100%}
 th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);
   vertical-align:top;white-space:nowrap}
@@ -152,6 +176,19 @@ tr:last-child td{border-bottom:none}
 .subtab.active .cnt{color:var(--accent);border-color:var(--accent)}
 tr.offrow td{opacity:.62}
 .devnote{color:var(--muted);font-size:12px;margin:10px 0 0}
+/* 白名单徽标 + 设备选址弹窗 */
+.badge{display:inline-block;font-size:11px;padding:0 7px;border-radius:9px;margin-left:5px;
+  background:var(--ok-bg);color:var(--ok);vertical-align:1px}
+.wlman{color:var(--muted);font-size:11px;margin-left:5px}
+#dlgMask{position:fixed;inset:0;background:rgba(15,18,24,.45);display:flex;
+  align-items:center;justify-content:center;z-index:50;padding:16px}
+.dlg{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  width:420px;max-width:100%;padding:18px 22px 16px;max-height:92vh;overflow:auto}
+.dlg h3{margin:0 0 6px;font-size:14.5px;text-align:center}
+.dlg .flab{display:block;font-size:12.5px;color:var(--muted);margin:11px 0 4px}
+.dlg input,.dlg select{width:100%;font-size:13.5px;padding:8px 10px}
+.dlgbtns{display:flex;justify-content:center;gap:12px;margin-top:16px}
+.dlgbtns button{min-width:96px}
 </style>
 </head>
 <body>
@@ -186,6 +223,7 @@ tr.offrow td{opacity:.62}
   <nav class="tabs" role="tablist">
     <button class="tab active" id="tabbtn-main" data-tab="main">同步与设置</button>
     <button class="tab" id="tabbtn-devices" data-tab="devices">设备列表</button>
+    <button class="tab" id="tabbtn-events" data-tab="events">同步记录</button>
     <button class="tab" id="tabbtn-notify" data-tab="notify">通知设置</button>
     <button class="tab" id="tabbtn-status" data-tab="status">运行状态</button>
     <button class="tab" id="tabbtn-about" data-tab="about">关于</button>
@@ -198,25 +236,39 @@ tr.offrow td{opacity:.62}
       执行结果在「运行状态」页的「操作结果」栏查看。</p>
     <div class="toolbar">
       <button id="btnSync" class="primary">立即同步一次</button>
-      <button id="btnRefresh">刷新页面数据</button>
+      <button id="btnResetCounters">重置累计写入</button>
+      <span class="fwtoggle" title="IPv6 防火墙总开关：关闭后白名单整体不生效，同步暂停">
+        <span>IPv6 防火墙</span>
+        <button id="fwSwitch" class="swbtn" type="button" aria-label="IPv6 防火墙总开关"></button>
+        <b id="fwSwitchTxt">…</b>
+      </span>
     </div>
   </div>
 
   <div id="settings"></div>
 
   <div class="card">
-    <h2>路由器ipv6白名单<button id="btnWl" class="primary hbtn">读取白名单</button></h2>
-    <p class="desc" id="wlDesc">点右上「读取白名单」获取；只读，不会改动。</p>
+    <h2>IPv6 防火墙白名单<span class="hbtns">
+      <button id="btnWl" class="hbtn"><svg viewBox="0 0 16 16" width="13" height="13"
+        style="vertical-align:-2px" aria-hidden="true"><path fill="none"
+        stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+        d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.8v2.7h-2.7"/></svg> 刷新</button>
+      <button id="btnWlAdd" class="primary hbtn">＋ 添加</button></span></h2>
+    <p class="desc" id="wlDesc">点「添加」选一台设备保存：立即写入白名单，之后每轮
+      自动跟随该设备的地址变化原地更新（打「自动维护」标）。手工条目只展示，不会被动。</p>
     <div id="wlBox"></div>
   </div>
   </div><!-- /tab-main -->
 
   <div id="tab-devices" class="hide">
     <div class="card">
-      <h2>设备列表<button id="btnHosts" class="primary hbtn">刷新设备列表</button></h2>
-      <p class="desc" id="hostsDesc">进入页面已自动加载；点右上「刷新设备列表」重新获取。把 NAS 的 MAC 填进
-        「目标设备 MAC」即可精确定位。在线/离线/儿童上网来自路由器设备档案（HostInfo），
-        黑名单来自 WiFi MAC 过滤配置（wlanfilterenhance）。</p>
+      <h2>设备列表<button id="btnHosts" class="primary hbtn"><svg viewBox="0 0 16 16" width="13" height="13"
+        style="vertical-align:-2px" aria-hidden="true"><path fill="none"
+        stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+        d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.8v2.7h-2.7"/></svg> 刷新</button></h2>
+      <p class="desc" id="hostsDesc">进入页面已自动加载；点右上「刷新」重新获取。
+        在线/离线/儿童上网来自路由器设备档案（HostInfo），黑名单来自 WiFi MAC 过滤配置
+        （wlanfilterenhance）。在白名单卡里点「添加」选设备即可放行任意一台。</p>
       <div class="subtabs" role="tablist">
         <button class="subtab active" id="devtab-online" type="button">在线设备<span class="cnt" id="cnt-online">0</span></button>
         <button class="subtab" id="devtab-offline" type="button">离线设备<span class="cnt" id="cnt-offline">0</span></button>
@@ -229,6 +281,38 @@ tr.offrow td{opacity:.62}
       <div id="devbox-kids" class="hide"></div>
     </div>
   </div><!-- /tab-devices -->
+
+  <div id="tab-events" class="hide">
+    <div class="card">
+      <h2>同步记录<button id="btnEv" class="primary hbtn"><svg viewBox="0 0 16 16" width="13" height="13"
+        style="vertical-align:-2px" aria-hidden="true"><path fill="none"
+        stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+        d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.8v2.7h-2.7"/></svg> 刷新</button></h2>
+      <p class="desc">每次真正改动路由器白名单的动作都记一条（地址没变的轮次不记）；
+        更新会显示 旧地址 → 新地址。记录落盘在 <span class="mono">/data/events.jsonl</span>，
+        重启不丢；超出保留上限自动丢弃最旧。</p>
+      <div class="toolbar" style="margin-bottom:10px">
+        <input id="evQ" placeholder="搜索设备名 / MAC / 地址…" class="evq">
+        <select id="evAct">
+          <option value="">全部动作</option>
+          <option value="created">新增</option>
+          <option value="updated">更新</option>
+          <option value="removed">删除</option>
+          <option value="fw">开关</option>
+        </select>
+        <button id="btnEvClear">清空记录</button>
+      </div>
+      <p class="desc" style="margin:0 0 10px">保留上限
+        <select id="evMax">
+          <option>100</option><option>200</option><option>500</option>
+        </select>
+        条，改完即时生效并落盘　<span id="evMeta"></span></p>
+      <div id="evBox"></div>
+      <div style="text-align:center;margin-top:10px">
+        <button id="btnEvMore" style="display:none">加载更多</button>
+      </div>
+    </div>
+  </div><!-- /tab-events -->
 
   <div id="tab-notify" class="hide">
     <div id="notifySettings"></div>
@@ -243,7 +327,7 @@ tr.offrow td{opacity:.62}
     </div>
     <div class="card">
       <h2>操作结果</h2>
-      <p class="desc">各页操作按钮（立即同步 / 测试连接 / 读取白名单 / 刷新设备列表等）的返回结果都汇总在这里，需要时再来查看。</p>
+      <p class="desc">各页操作按钮（立即同步 / 测试连接 / 各页「刷新」等）的返回结果都汇总在这里，需要时再来查看。</p>
       <pre class="out" id="out">（结果会显示在这里）</pre>
     </div>
   </div><!-- /tab-status -->
@@ -251,14 +335,16 @@ tr.offrow td{opacity:.62}
   <div id="tab-about" class="hide">
     <div class="card">
       <h2>IPv6 白名单同步 <span class="n" id="aboutVersion"></span></h2>
-      <p class="desc">让 NAS 的公网 IPv6 地址在变化后依然可访问：自动发现本机最新的
-        IPv6 地址，同步写入路由器的 IPv6 防火墙白名单，并按需放行指定端口，
-        外网直连不再受地址变化影响。</p>
+      <p class="desc">让局域网设备的公网 IPv6 访问不因地址变化而中断：自动跟踪设备的
+        当前 IPv6，同步写入路由器的 IPv6 防火墙白名单并按需放行端口，
+        支持同时维护 NAS 在内的多台设备，外网直连不再受地址变化影响。</p>
       <ul class="desc">
-        <li><b>自动发现</b> —— 从本机接口或路由器记录自动获取当前 IPv6，地址变了自动更新</li>
-        <li><b>白名单同步</b> —— 按设备 MAC 定位，自动写条目、清理过期条目</li>
+        <li><b>按设备维护</b> —— 白名单里点「添加」选设备即放行，之后地址一变自动原地更新条目</li>
+        <li><b>自动取址</b> —— 绑定设备的规则取路由器设备记录的最新地址；设备离线或记录未就绪时自动跳过，不误删</li>
+        <li><b>设备列表</b> —— 在线 / 离线 / 黑名单 / 儿童上网一页看全，添加放行时直接按设备选</li>
         <li><b>多端口放行</b> —— 一次放行多个端口（逗号分隔），不用逐个去路由器设置</li>
         <li><b>网页控制台</b> —— 所有配置网页可改、持久化保存，改完即时生效</li>
+        <li><b>同步记录</b> —— 白名单每次真实改动都有流水可查，落盘保存重启不丢</li>
         <li><b>变更通知</b> —— 支持 ntfy / gotify / 企业微信，防火墙每次被修改自动推送</li>
         <li><b>演练模式</b> —— 只看会改什么、不真写，先确认再应用</li>
       </ul>
@@ -274,6 +360,28 @@ tr.offrow td{opacity:.62}
   <span class="hint" id="hint"></span>
   <button id="btnReset">放弃修改</button>
   <button id="btnSave" class="primary">保存并应用</button>
+</div>
+
+<div id="dlgMask" class="hide">
+  <div class="dlg">
+    <h3 id="dlgTitle">添加白名单条目</h3>
+    <p class="desc" id="dlgHint" style="margin:0 0 4px">选设备后自动填入它的当前地址（设备地址列表第一条）。</p>
+    <label class="flab">服务名称</label>
+    <input type="text" id="dlgName" placeholder="留空则自动用设备名" autocomplete="off">
+    <label class="flab">允许来源</label>
+    <input type="text" id="dlgRemote" value="::/0" autocomplete="off">
+    <label class="flab">设备名称</label>
+    <select id="dlgDev"><option value="">未知设备</option></select>
+    <label class="flab">本地 IP</label>
+    <input type="text" id="dlgLocal" class="mono" placeholder="选设备后自动填入，也可手填" autocomplete="off">
+    <label class="flab">通信端口</label>
+    <input type="text" id="dlgPort" placeholder="-1 = 全部端口，多个用逗号分隔" autocomplete="off">
+    <div class="msg" id="dlgMsg"></div>
+    <div class="dlgbtns">
+      <button id="dlgCancel">取消</button>
+      <button id="dlgSave" class="primary">保存</button>
+    </div>
+  </div>
 </div>
 
 <div id="toast"></div>
@@ -589,10 +697,16 @@ tr.offrow td{opacity:.62}
     var ok = !!st.ok;
     var unconf = !!st.unconfigured;
     var fw = st.firewall_ipv6_enabled;
-    var nAddr = 0;
+    var nAddr = 0, nDev = 0;
+    var devLines = [];
     var rules = st.rules || {};
     Object.keys(rules).forEach(function (k) {
-      nAddr += ((rules[k] || {}).addrs || []).length;
+      var r = rules[k] || {};
+      var a = r.addrs || [];
+      nAddr += a.length;
+      if (a.length) { nDev += 1; }
+      devLines.push(k + "：" + (a.join("、") ||
+        "（本轮无地址：" + (r.detail || r.error || "跳过") + "）"));
     });
     // 「同步」这一格最容易误读：ok=false 既可能是「第一轮还没跑完」，
     // 也可能是「最近一轮失败了」，也可能只是「密码还没填」。分开说。
@@ -616,11 +730,14 @@ tr.offrow td{opacity:.62}
       ["路由器登录", st.logged_in ? "已登录" : "未登录", st.logged_in ? "on" : "off"],
       ["IPv6 防火墙", (fw === null || fw === undefined) ? "未知" : (fw ? "已开启" : "已关闭"),
         (fw === null || fw === undefined) ? "off" : (fw ? "on" : "warn")],
-      ["采用地址", nAddr + " 个", nAddr ? "on" : "off"],
+      ["采用地址", nAddr + " 个 · " + nDev + " 台设备", nAddr ? "on" : "off",
+        "自动维护覆盖 " + nDev + " 台设备、共 " + nAddr + " 个地址，逐台：\n"
+        + (devLines.join("\n") || "（还没有任何维护规则）")],
       ["最近一轮", st.last_tick_at || "尚未运行", "off",
         "最近一次尝试的时间（不论成功失败）"],
       ["累计写入", total + " 次", total ? "on" : "off",
-        "跨容器重启累计（存 " + (c.state_file || "/data/state.json") + "）：新增 "
+        "跨容器重启累计（存 " + (c.state_file || "/data/state.json")
+        + "），按条目计、含全部自动维护设备：新增 "
         + (c.created || 0) + " / 更新 " + (c.updated || 0) + " / 删除 "
         + (c.removed || 0)
         + "\n本次启动以来：" + (c.session_writes || 0) + " 次"
@@ -665,15 +782,15 @@ tr.offrow td{opacity:.62}
     }
   }
 
-  // 状态里带的规则名（后端 st.rules 的键），用来在白名单里标出"这条归谁管"
-  var ruleNames = [];
+  // 白名单页数据：规则列表（谁在自动维护）与设备（弹窗选址用），loadWL 时更新
+  var wlData = { rules: [], hosts: [] };
 
   function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
   // 与后端 trustlist.managed_pattern 保持一致：基础名、基础名@N，各自可再带 -端口。
   function ownerOfName(name) {
-    for (var i = 0; i < ruleNames.length; i++) {
-      var rn = ruleNames[i];
+    for (var i = 0; i < wlData.rules.length; i++) {
+      var rn = wlData.rules[i].name;
       if (!rn) { continue; }
       var rx = new RegExp("^" + escapeRe(rn) + "(@\\d+)?(-\\d+)?$");
       if (rx.test(name)) { return rn; }
@@ -686,9 +803,56 @@ tr.offrow td{opacity:.62}
     els.who.textContent = state.user;
     var uv = document.getElementById("aboutVersion");
     if (uv) { uv.textContent = "v" + VERSION; }
-    // 白名单表靠它把条目名（NAS / NAS@2 / NAS-5005…）认回是哪条规则在管
-    ruleNames = Object.keys(st.rules || {});
+    syncFwSwitch(st.firewall_ipv6_enabled);
   }
+
+  // ---------- 快捷操作：总开关滑动开关 + 重置累计写入 ----------
+  var fwBusy = false;
+
+  function syncFwSwitch(enabled) {
+    var sw = document.getElementById("fwSwitch");
+    var txt = document.getElementById("fwSwitchTxt");
+    if (!sw || fwBusy) { return; }
+    var on = enabled === true;
+    sw.className = "swbtn" + (on ? " on" : "");
+    txt.textContent = on ? "已开启" : "已关闭";
+    txt.style.color = on ? "var(--ok)" : "var(--muted)";
+  }
+
+  document.getElementById("fwSwitch").addEventListener("click", function () {
+    var sw = document.getElementById("fwSwitch");
+    var want = !sw.classList.contains("on");
+    if (!confirm((want ? "打开" : "关闭") + " IPv6 防火墙总开关？" +
+        (want ? "" : "关闭后白名单整体不生效，同步将暂停，直到重新打开。"))) { return; }
+    fwBusy = true;
+    sw.disabled = true;
+    api("/api/router/firewall", {
+      method: "POST",
+      body: JSON.stringify({ enable: want })
+    }).then(function (j) {
+      showOut("防火墙开关", j);
+      toast(j.ok ? ("总开关已" + (want ? "打开" : "关闭")) : ("失败：" + j.error),
+        j.ok ? "ok" : "err");
+      fwBusy = false;
+      sw.disabled = false;
+      syncFwSwitch(want === true);
+      return load(false).then(loadWL);
+    }).catch(function (e) {
+      showOut("防火墙开关", "请求失败：" + e);
+      fwBusy = false;
+      sw.disabled = false;
+    });
+  });
+
+  document.getElementById("btnResetCounters").addEventListener("click", function () {
+    if (!confirm("确定把累计写入计数清零？此操作不影响白名单和同步。")) { return; }
+    api("/api/counters/reset", { method: "POST", body: "{}" })
+      .then(function (j) {
+        showOut("重置累计写入", j);
+        toast(j.ok ? "累计写入计数已清零" : ("失败：" + j.error), j.ok ? "ok" : "err");
+        return load(false);
+      });
+  });
 
   // ---------- 数据加载 ----------
   function load(banner) {
@@ -716,8 +880,10 @@ tr.offrow td{opacity:.62}
     els.login.classList.add("hide");
     els.app.classList.remove("hide");
     document.getElementById("foot").classList.remove("hide");
-    load(false).then(function () { toast("已登录", "ok"); })
-      .catch(function (e) { toast("加载失败：" + e, "err"); });
+    load(false).then(function () {
+      toast("已登录", "ok");
+      loadWL();               // 白名单是主页的核心卡片，进来就拉一次
+    }).catch(function (e) { toast("加载失败：" + e, "err"); });
   }
 
   function action(btnId, title, method, path, body) {
@@ -753,7 +919,7 @@ tr.offrow td{opacity:.62}
   // ---------- 选项卡 ----------
   var hostsLoaded = false;
   function switchTab(name) {
-    ["main", "devices", "notify", "status", "about"].forEach(function (t) {
+    ["main", "devices", "events", "notify", "status", "about"].forEach(function (t) {
       document.getElementById("tab-" + t).classList.toggle("hide", t !== name);
       document.getElementById("tabbtn-" + t).classList.toggle("active", t === name);
     });
@@ -764,9 +930,158 @@ tr.offrow td{opacity:.62}
   }
   document.getElementById("tabbtn-main").addEventListener("click", function () { switchTab("main"); });
   document.getElementById("tabbtn-devices").addEventListener("click", function () { switchTab("devices"); });
+  document.getElementById("tabbtn-events").addEventListener("click", function () {
+    switchTab("events");
+    if (!evLoaded) { loadEvents(); }
+  });
   document.getElementById("tabbtn-notify").addEventListener("click", function () { switchTab("notify"); });
   document.getElementById("tabbtn-status").addEventListener("click", function () { switchTab("status"); });
   document.getElementById("tabbtn-about").addEventListener("click", function () { switchTab("about"); });
+
+  // ---------- 同步记录（文件即数据：现读 /api/events，前端过滤分页） ----------
+  var evLoaded = false;
+  var evShown = 100;                 // 首屏只渲染最近 100 条，「加载更多」翻页
+  var EV_BADGE = { created: ["新增", "ev-new"], updated: ["更新", "ev-upd"],
+                   removed: ["删除", "ev-del"], fw: ["开关", "ev-fw"] };
+
+  function evAddrCell(td, e) {
+    // 全程 textContent 防注入（设备名/地址来自路由器，属不可信输入）
+    if (e.action === "fw") {
+      td.textContent = e.addr || "";
+      return;
+    }
+    if (e.old_addr) {
+      var old = document.createElement("span");
+      old.className = "mono evold";
+      old.textContent = e.old_addr;
+      td.appendChild(old);
+      td.appendChild(document.createTextNode(" → "));
+    }
+    var cur = document.createElement("span");
+    cur.className = "mono";
+    cur.textContent = e.addr || "";
+    td.appendChild(cur);
+  }
+
+  function renderEvents(all) {
+    var q = document.getElementById("evQ").value.trim().toLowerCase();
+    var act = document.getElementById("evAct").value;
+    var list = all.filter(function (e) {
+      if (act && e.action !== act) { return false; }
+      if (!q) { return true; }
+      return ((e.device || "") + " " + (e.mac || "") + " " + (e.entry || "")
+              + " " + (e.addr || "") + " " + (e.old_addr || ""))
+        .toLowerCase().indexOf(q) >= 0;
+    });
+    var box = document.getElementById("evBox");
+    box.textContent = "";
+    if (!list.length) {
+      var p = document.createElement("p");
+      p.className = "desc";
+      p.style.textAlign = "center";
+      p.textContent = "（记录已清空，或没有匹配的记录）";
+      box.appendChild(p);
+      document.getElementById("evMeta").textContent =
+        "文件共 " + all.length + " 条";
+      return;
+    }
+    var t = document.createElement("table");
+    t.style.minWidth = "640px";        // 手机窄屏：表格整体横滑（tblwrap）
+    var head = document.createElement("tr");
+    ["时间", "设备", "动作", "条目", "地址", "端口", "触发"].forEach(function (h) {
+      var th = document.createElement("th"); th.textContent = h; head.appendChild(th);
+    });
+    t.appendChild(head);
+    list.slice(0, evShown).forEach(function (e) {
+      var tr = document.createElement("tr");
+      var td;
+      td = document.createElement("td"); td.textContent = e.ts || "";
+      td.style.color = "var(--muted)"; tr.appendChild(td);
+      td = document.createElement("td");
+      td.textContent = e.device || "（未知）";
+      if (e.mac) {
+        var br = document.createElement("br");
+        var m = document.createElement("span");
+        m.className = "mono"; m.style.fontSize = "11px";
+        m.style.color = "var(--muted)";
+        m.textContent = e.mac;
+        td.appendChild(br); td.appendChild(m);
+      }
+      tr.appendChild(td);
+      td = document.createElement("td");
+      var b = EV_BADGE[e.action] || [e.action || "?", ""];
+      var sp = document.createElement("span");
+      sp.className = "evbadge " + b[1]; sp.textContent = b[0];
+      td.appendChild(sp); tr.appendChild(td);
+      td = document.createElement("td"); td.className = "mono";
+      td.textContent = e.entry || ""; tr.appendChild(td);
+      td = document.createElement("td");
+      evAddrCell(td, e);
+      tr.appendChild(td);
+      td = document.createElement("td"); td.textContent = e.port || "";
+      tr.appendChild(td);
+      td = document.createElement("td"); td.textContent = e.trigger || "";
+      td.style.color = "var(--muted)"; tr.appendChild(td);
+      t.appendChild(tr);
+    });
+    var sc = document.createElement("div");
+    sc.className = "tblwrap";
+    sc.appendChild(t);
+    box.appendChild(sc);
+    document.getElementById("evMeta").textContent =
+      "匹配 " + list.length + " 条 / 文件共 " + all.length +
+      " 条 · 显示最近 " + Math.min(evShown, list.length) + " 条";
+    document.getElementById("btnEvMore").style.display =
+      list.length > evShown ? "" : "none";
+  }
+
+  var evAll = [];
+  function loadEvents() {
+    var btn = document.getElementById("btnEv");
+    btn.disabled = true;
+    return api("/api/events").then(function (j) {
+      if (!j.ok) { toast("读取同步记录失败：" + (j.error || ""), "err"); return; }
+      evLoaded = true;
+      evAll = (j.events || []).slice().reverse();   // 新的在上
+      var sel = document.getElementById("evMax");
+      sel.value = String(j.max || 100);
+      if (sel.selectedIndex < 0) { sel.value = "100"; }
+      renderEvents(evAll);
+    }).catch(function (e) { toast("请求失败：" + e, "err"); })
+      .then(function () { btn.disabled = false; });
+  }
+
+  document.getElementById("btnEv").addEventListener("click", loadEvents);
+  document.getElementById("evQ").addEventListener("input", function () {
+    evShown = 100; renderEvents(evAll);
+  });
+  document.getElementById("evAct").addEventListener("change", function () {
+    evShown = 100; renderEvents(evAll);
+  });
+  document.getElementById("btnEvMore").addEventListener("click", function () {
+    evShown += 100; renderEvents(evAll);
+  });
+  document.getElementById("evMax").addEventListener("change", function () {
+    var v = parseInt(this.value, 10);
+    this.disabled = true;
+    api("/api/events/max", { method: "POST", body: JSON.stringify({ max: v }) })
+      .then(function (j) {
+        toast(j.ok ? ("保留上限已改为 " + v + " 条并落盘")
+                   : ("失败：" + (j.error || "")), j.ok ? "ok" : "err");
+      })
+      .then(function () { document.getElementById("evMax").disabled = false; });
+  });
+  document.getElementById("btnEvClear").addEventListener("click", function () {
+    if (!confirm("确定清空全部同步记录？此操作不可恢复（不影响白名单和同步）。")) { return; }
+    var b = this; b.disabled = true;
+    api("/api/events/clear", { method: "POST", body: "{}" })
+      .then(function (j) {
+        if (j.ok) { evAll = []; evShown = 100; renderEvents(evAll); }
+        toast(j.ok ? "记录已清空" : ("失败：" + (j.error || "")),
+              j.ok ? "ok" : "err");
+      })
+      .then(function () { b.disabled = false; });
+  });
 
   // 设备列表页内的二级页签：在线 / 离线 / 黑名单 / 儿童上网
   var DEV_TABS = ["online", "offline", "black", "kids"];
@@ -880,82 +1195,237 @@ tr.offrow td{opacity:.62}
       .then(function () { btn.disabled = false; });
   }
   document.getElementById("btnHosts").addEventListener("click", function () { loadHosts(); });
-  document.getElementById("btnWl").addEventListener("click", function () {
+  // ---------- 白名单：路由器式表格 + 设备选址弹窗 ----------
+  var dlgEditing = null;   // null=新增；{mode:"rule",old:规则名,entry:条目}；{mode:"entry",id,entry}
+
+  function loadWL() {
     var btn = document.getElementById("btnWl");
     btn.disabled = true;
-    api("/api/router/whitelist").then(function (j) {
+    return api("/api/router/whitelist").then(function (j) {
       showOut("白名单", j);
       if (!j.ok) { toast("读取白名单失败：" + (j.error || ""), "err"); return; }
-      els.wlDesc.textContent = "IPv6 防火墙总开关：" + (j.enabled ? "已开启" : "已关闭") +
-        "（白名单只在开启时生效）　条目 " + j.entries.length + "/" + j.max;
-      var box = document.getElementById("wlBox");
-      box.textContent = "";
-      // 固件会在条目里附带 devName（按 LocalIp 反查设备列表得到），有就显示
-      var hasDev = j.entries.some(function (e) { return e.devName; });
-      var nManaged = j.entries.filter(function (e) {
+      wlData.rules = j.rules || [];
+      wlData.hosts = j.hosts || [];
+      var nManaged = (j.entries || []).filter(function (e) {
         return ownerOfName(e.Name || "");
       }).length;
-      els.wlDesc.textContent += "　其中 " + nManaged +
-        " 条由本程序自动维护（其余不动）";
+      var box = document.getElementById("wlBox");
+      // 总开关关闭 → 整卡收起：只留一行提示，表格与按钮全部隐藏
+      if (!j.enabled) {
+        els.wlDesc.textContent = "IPv6 防火墙总开关已关闭。";
+        document.getElementById("btnWl").style.display = "none";
+        document.getElementById("btnWlAdd").style.display = "none";
+        box.textContent = "";
+        var offHint = document.createElement("div");
+        offHint.className = "help";
+        offHint.style.color = "var(--warn)";
+        offHint.textContent = "总开关已关闭，白名单整体不生效 —— 表格已隐藏。" +
+          "可在上方「快捷操作」里重新打开；同步也已暂停，打开后下一轮自动恢复。";
+        box.appendChild(offHint);
+        return;
+      }
+      document.getElementById("btnWl").style.display = "";
+      document.getElementById("btnWlAdd").style.display = "";
+      els.wlDesc.textContent = "条目 " + j.entries.length + "/" + j.max +
+        "　其中 " + nManaged + " 条由本程序自动维护（其余不动）";
+      box.textContent = "";
       var t = document.createElement("table");
       var head = document.createElement("tr");
-      ["名称", "归属规则", "内网 IPv6", "允许来源", "端口"]
-        .concat(hasDev ? ["设备"] : [])
-        .forEach(function (h) {
-          var th = document.createElement("th"); th.textContent = h; head.appendChild(th);
-        });
+      ["服务名称", "允许来源", "本地 IP", "通信端口", "操作"].forEach(function (h) {
+        var th = document.createElement("th"); th.textContent = h; head.appendChild(th);
+      });
       t.appendChild(head);
-      j.entries.forEach(function (e) {
-        var tr = document.createElement("tr");
+      (j.entries || []).forEach(function (e) {
         var owner = ownerOfName(e.Name || "");
-        // 第 1 列（index 1）是「归属规则」，不是原始字段，用 null 占位
-        var vals = [e.Name, null, e.LocalIp, e.RemoteIp, e.Port]
-          .concat(hasDev ? [e.devName || "（未识别）"] : []);
-        vals.forEach(function (v, i) {
-          var td = document.createElement("td");
-          if (i === 1) {
-            if (owner) {
-              td.textContent = owner + "（自动维护）";
-            } else {
-              td.textContent = "用户手工添加";
-              td.style.color = "var(--muted)";
-            }
-          } else {
-            td.textContent = (v === null || v === undefined) ? "" : v;
-          }
-          tr.appendChild(td);
+        var tr = document.createElement("tr");
+        // 第 1 列：服务名称 + 归属徽标
+        var c0 = document.createElement("td");
+        c0.appendChild(document.createTextNode(e.Name || ""));
+        if (owner) {
+          var bg = document.createElement("span");
+          bg.className = "badge"; bg.textContent = "自动维护";
+          c0.appendChild(bg);
+        } else {
+          var mn = document.createElement("span");
+          mn.className = "wlman"; mn.textContent = "手工";
+          c0.appendChild(mn);
+        }
+        tr.appendChild(c0);
+        [e.RemoteIp || "::/0", e.LocalIp,
+         (e.Port === -1 || e.Port === "-1") ? "全部" : e.Port]
+          .forEach(function (v) {
+            var td = document.createElement("td");
+            td.textContent = (v === null || v === undefined || v === "") ? "—" : v;
+            tr.appendChild(td);
+          });
+        // 操作：编辑 / 删除（动态文本一律 textContent，主机名不可信）
+        var cOp = document.createElement("td");
+        var be = document.createElement("button"); be.textContent = "编辑";
+        var bd = document.createElement("button"); bd.textContent = "删除";
+        be.addEventListener("click", function () {
+          openDlg(owner ? { mode: "rule", old: owner, entry: e }
+                        : { mode: "entry", id: e.ID || "", entry: e });
         });
+        bd.addEventListener("click", function () {
+          if (owner) { removeRule(owner); } else { deleteEntry(e); }
+        });
+        cOp.appendChild(be);
+        cOp.appendChild(document.createTextNode(" "));
+        cOp.appendChild(bd);
+        tr.appendChild(cOp);
         t.appendChild(tr);
       });
       var sc = document.createElement("div");
       sc.className = "tblwrap";
       sc.appendChild(t);
       box.appendChild(sc);
-      var bar = document.createElement("div");
-      bar.className = "toolbar";
-      bar.style.marginTop = "12px";
-      var b = document.createElement("button");
-      b.textContent = j.enabled ? "关闭 IPv6 防火墙总开关" : "打开 IPv6 防火墙总开关";
-      b.addEventListener("click", function () {
-        b.disabled = true;
-        api("/api/router/firewall", {
-          method: "POST",
-          body: JSON.stringify({ enable: !j.enabled })
-        }).then(function (r2) {
-          showOut("防火墙开关", r2);
-          toast(r2.ok ? ("已" + (r2.enabled ? "开启" : "关闭")) : ("失败：" + r2.error),
-            r2.ok ? "ok" : "err");
-          return load(false);
-        }).then(function () { b.disabled = false; });
-      });
-      bar.appendChild(b);
-      box.appendChild(bar);
     }).catch(function (e) { showOut("白名单", "请求失败：" + e); })
       .then(function () { btn.disabled = false; });
+  }
+
+  function fillDevSelect(selectedMac) {
+    var sel = document.getElementById("dlgDev");
+    sel.textContent = "";
+    var blank = document.createElement("option");
+    blank.value = ""; blank.textContent = "未知设备";
+    sel.appendChild(blank);
+    wlData.hosts.forEach(function (h) {
+      var o = document.createElement("option");
+      var ipv6 = (h.ipv6 || [])[0] || "";
+      if (!ipv6) {
+        o.disabled = true;
+        o.textContent = h.name + "(" + h.mac + ")　无全局 IPv6";
+      } else {
+        o.value = h.mac;
+        o.textContent = h.name + "(" + h.mac + ")";
+      }
+      sel.appendChild(o);
+    });
+    sel.value = selectedMac || "";
+    if (sel.value !== (selectedMac || "")) { sel.value = ""; }
+  }
+
+  function openDlg(editing) {
+    dlgEditing = editing || null;
+    var title = document.getElementById("dlgTitle");
+    var hint = document.getElementById("dlgHint");
+    var name = document.getElementById("dlgName");
+    var remote = document.getElementById("dlgRemote");
+    var local = document.getElementById("dlgLocal");
+    var port = document.getElementById("dlgPort");
+    var msg = document.getElementById("dlgMsg");
+    msg.className = "msg"; msg.textContent = "";
+    if (!editing) {
+      title.textContent = "添加白名单条目";
+      hint.textContent = "选设备后自动填入它的当前地址（设备地址列表第一条）。保存后加入自动维护，地址变化时原地更新。";
+      name.value = ""; remote.value = "::/0"; local.value = "";
+      port.value = ""; fillDevSelect("");
+    } else if (editing.mode === "rule") {
+      var r = null;
+      wlData.rules.forEach(function (x) { if (x.name === editing.old) { r = x; } });
+      title.textContent = "编辑自动维护条目";
+      hint.textContent = "可换绑设备或改端口；保存后立即按新配置同步。";
+      name.value = editing.old;
+      remote.value = (r && r.remote_ip) || "::/0";
+      port.value = (r && r.port === "全部") ? "-1" : ((r && r.port) || "-1");
+      local.value = editing.entry ? (editing.entry.LocalIp || "") : "";
+      fillDevSelect(r ? r.mac : "");
+    } else {
+      var e2 = editing.entry || {};
+      title.textContent = "编辑手工条目";
+      hint.textContent = "手工条目直接改字段保存；要自动跟随设备地址，请删除后用「添加」重加。";
+      name.value = e2.Name || "";
+      remote.value = e2.RemoteIp || "::/0";
+      var p = e2.Port;
+      port.value = (p === -1 || p === "-1" || p === null || p === undefined)
+        ? "-1" : String(p);
+      local.value = e2.LocalIp || "";
+      fillDevSelect("");
+    }
+    document.getElementById("dlgMask").classList.remove("hide");
+  }
+
+  function closeDlg() {
+    document.getElementById("dlgMask").classList.add("hide");
+    dlgEditing = null;
+  }
+
+  document.getElementById("dlgDev").addEventListener("change", function () {
+    var mac = this.value;
+    if (!mac) { return; }
+    var hit = null;
+    wlData.hosts.forEach(function (h) { if (h.mac === mac) { hit = h; } });
+    if (hit) {
+      document.getElementById("dlgLocal").value = (hit.ipv6 || [])[0] || "";
+      var nameBox = document.getElementById("dlgName");
+      if (!nameBox.value) { nameBox.value = hit.name; }
+    }
   });
-  document.getElementById("btnRefresh").addEventListener("click", function () {
-    load(false).then(function () { toast("已刷新", "ok"); });
+  document.getElementById("dlgCancel").addEventListener("click", closeDlg);
+  document.getElementById("dlgMask").addEventListener("click", function (ev) {
+    if (ev.target === this) { closeDlg(); }
   });
+  document.getElementById("dlgSave").addEventListener("click", function () {
+    var body = {
+      name: document.getElementById("dlgName").value.trim(),
+      remote_ip: document.getElementById("dlgRemote").value.trim(),
+      mac: document.getElementById("dlgDev").value,
+      local_ip: document.getElementById("dlgLocal").value.trim(),
+      port: document.getElementById("dlgPort").value.trim() || "-1"
+    };
+    var msg = document.getElementById("dlgMsg");
+    function fail(t) { msg.className = "msg err"; msg.textContent = t; }
+    if (!body.name) { return fail("服务名称不能为空"); }
+    var p;
+    if (dlgEditing && dlgEditing.mode === "rule") {
+      body.action = "update"; body.old_name = dlgEditing.old;
+      p = api("/api/rules", { method: "POST", body: JSON.stringify(body) });
+    } else if (dlgEditing && dlgEditing.mode === "entry") {
+      body.id = dlgEditing.id;
+      p = api("/api/router/whitelist/update",
+              { method: "POST", body: JSON.stringify(body) });
+    } else {
+      if (!body.mac) { return fail("请选择一台设备（自动维护需要跟随设备地址）"); }
+      if (!body.local_ip) { return fail("本地 IP 为空 —— 所选设备当前没有全局 IPv6"); }
+      body.action = "add";
+      p = api("/api/rules", { method: "POST", body: JSON.stringify(body) });
+    }
+    var btn = document.getElementById("dlgSave");
+    btn.disabled = true;
+    p.then(function (j) {
+      if (!j.ok) { return fail(j.error || "保存失败"); }
+      closeDlg();
+      (j.notes || []).forEach(function (n) { toast(n, "ok"); });
+      loadWL();
+      load(false);
+    }).catch(function (e) { fail("请求失败：" + e); })
+      .then(function () { btn.disabled = false; });
+  });
+
+  function removeRule(name) {
+    if (!window.confirm("删除条目「" + name + "」？\n会连同自动维护规则一起删除，之后不再自动重建。")) { return; }
+    api("/api/rules", { method: "POST",
+      body: JSON.stringify({ action: "remove", name: name }) })
+      .then(function (j) {
+        showOut("删除条目", j);
+        toast(j.ok ? "已删除" : ("删除失败：" + (j.error || "")), j.ok ? "ok" : "err");
+        if (j.ok) { loadWL(); load(false); }
+      });
+  }
+
+  function deleteEntry(e) {
+    if (!window.confirm("从路由器白名单删除条目「" + (e.Name || "") + "」？")) { return; }
+    api("/api/router/whitelist/delete", { method: "POST",
+      body: JSON.stringify({ id: e.ID || "", name: e.Name || "" }) })
+      .then(function (j) {
+        showOut("删除条目", j);
+        toast(j.ok ? "已删除" : ("删除失败：" + (j.error || "")), j.ok ? "ok" : "err");
+        if (j.ok) { loadWL(); }
+      });
+  }
+
+  document.getElementById("btnWl").addEventListener("click", function () { loadWL(); });
+  document.getElementById("btnWlAdd").addEventListener("click", function () { openDlg(null); });
   document.getElementById("btnSave").addEventListener("click", function () {
     var patch = collect();
     if (!Object.keys(patch).length) { toast("没有改动", "err"); return; }

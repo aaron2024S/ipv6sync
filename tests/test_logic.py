@@ -40,7 +40,9 @@ def C(a):
 class FakeRouter:
     """最小可用的假路由器：只实现本程序用到的几个接口。"""
 
-    def __init__(self, enabled=False, entries=None, hosts=None):
+    def __init__(self, enabled=True, entries=None, hosts=None):
+        # enabled 默认 True：绝大多数用例假设总开关开着（开着才会同步）；
+        # 专门测「关 = 待机」的用例显式传 enabled=False。
         self.logged_in = True
         self.username = "admin"
         self.level = 2
@@ -107,10 +109,12 @@ _state_seq = itertools.count(1)
 
 
 def make_cfg(**kw) -> Config:
+    # 规则不带 MAC = 「本机网卡」取址路径（环境变量来的老配置形态）；
+    # 绑 MAC 的设备规则（路由器第一条）由 TestDeviceRule 单独覆盖。
     cfg = Config(
         host="192.168.3.1", username="admin", password="x",
         session_file=None, poll_interval=1,
-        rules=[Rule(name="NAS", port=None, remote_ip="::/0", mac=NAS_MAC)],
+        rules=[Rule(name="NAS", port=None, remote_ip="::/0", mac=None)],
         state_file=os.path.join(_STATE_DIR, f"state-{next(_state_seq)}.json"),
     )
     for k, v in kw.items():
@@ -278,6 +282,25 @@ class TestSyncer(LocalNetStub, unittest.TestCase):
         self.assertEqual(snap["rules"]["NAS"]["action"], "unchanged")
         self.assertEqual(r.writes, [])          # 没有任何写操作
 
+    def test_firewall_off_skips_sync_and_resumes(self):
+        """总开关关闭 = 待机：本轮不写任何条目；重新打开后下一轮自动追平。
+
+        旧行为是开关关着也照样写条目（写上去也不生效，白费 flash）；
+        新语义与网页一致：关 = 只观察不写入。
+        """
+        r = FakeRouter(enabled=False, entries=[])
+        s = Syncer(make_cfg(), r)
+        snap = s.tick()
+        self.assertTrue(snap["ok"])             # 观察轮也算成功
+        self.assertFalse(snap["firewall_ipv6_enabled"])
+        self.assertEqual(r.writes, [])          # 不写条目
+        self.assertFalse(r.enabled)             # 也不会擅自动开关
+        # 用户把开关重新打开（比如从网页拨回去）→ 下一轮恢复同步
+        r.enabled = True
+        snap = s.tick()
+        self.assertEqual(snap["rules"]["NAS"]["action"], "created")
+        self.assertEqual(r.entries[0]["LocalIp"], C(OLD_ADDR))
+
     def test_unchanged_when_router_formats_address_differently(self):
         """回归：路由器回读的地址写法与 HostInfo 不同（大写/未压缩），
         但地址其实没变 —— 必须判为无变化。
@@ -358,19 +381,20 @@ class TestSyncer(LocalNetStub, unittest.TestCase):
         self.assertEqual(snap["rules"]["NAS"]["action"], "created")
         self.assertEqual(r.entries[0]["LocalIp"], OLD_ADDR.upper())   # 固件改写成了大写
 
-    def test_mac_off_this_host_is_warned(self):
-        """TARGET_MAC 不在本机网卡上 → 仍然写本机地址，但状态里必须看得见。
+    def test_rule_mac_not_in_router_table_skips(self):
+        """设备规则绑的 MAC 不在路由器设备表里 → 本轮跳过、白名单不动。
 
-        部署约定就是"只同步本机"，所以这里不中断；但这几乎总是配错了对象，
-        不提示的话用户会以为给 NVR 放行了、其实放行的是 NAS。
+        路由器刚重启、表还没重建时就是这种情形 —— 此时绝不能按「没有地址」
+        把既有条目清掉，等下一个周期表重建了自然恢复。
         """
         r = FakeRouter(entries=[])
         cfg = make_cfg()
-        cfg.rules[0].mac = "AA:BB:CC:DD:EE:FF"           # 别台设备的 MAC
-        self.patch_local([OLD_ADDR], {"001122aabbcc"})    # 本机只有 NAS 那块网卡
+        cfg.rules[0].mac = "AA:BB:CC:DD:EE:FF"           # 表里没有这台
+        self.patch_local([OLD_ADDR], set())
         st = Syncer(cfg, r).sync_rule(cfg.rules[0])
-        self.assertIn("TARGET_MAC 不是本机网卡", st.detail)
-        self.assertEqual(r.entries[0]["LocalIp"], C(OLD_ADDR))
+        self.assertEqual(st.action, "skip")
+        self.assertIn("没有该 MAC", st.detail)
+        self.assertEqual(r.entries, [])
 
     def test_ensure_firewall_on(self):
         r = FakeRouter(enabled=False)
@@ -489,17 +513,23 @@ class TestMultiPort(LocalNetStub, unittest.TestCase):
 
 
     def test_settings_rejects_bad_port_spec(self):
-        """网页保存时就要拦住坏端口规格，不能等同步引擎才炸。"""
+        """规则列表在保存时就要拦住坏端口规格，不能等同步引擎才炸。"""
         from app import settings as st_mod
+
+        def rules_with(port):
+            return {"RULES": [{"name": "A", "mac": "aa:bb:cc:dd:ee:ff",
+                               "port": port}]}
         with self.assertRaises(st_mod.SettingsError):
-            st_mod.validate_overlay({"PORT": "abc"})
+            st_mod.validate_overlay(rules_with("abc"))
         with self.assertRaises(st_mod.SettingsError):
-            st_mod.validate_overlay({"PORT": "80;443"})
+            st_mod.validate_overlay(rules_with("80;443"))
         with self.assertRaises(st_mod.SettingsError):
-            st_mod.validate_overlay({"PORT": "0"})
-        self.assertEqual(st_mod.validate_overlay({"PORT": "16667,5005"}),
-                         {"PORT": "16667,5005"})
-        self.assertEqual(st_mod.validate_overlay({"PORT": "-1"}), {"PORT": "-1"})
+            st_mod.validate_overlay(rules_with("0"))
+        self.assertEqual(
+            st_mod.validate_overlay(rules_with("16667,5005"))["RULES"][0]["port"],
+            "16667,5005")
+        self.assertEqual(
+            st_mod.validate_overlay(rules_with("-1"))["RULES"][0]["port"], "-1")
 
 
 class TestMultiAddress(LocalNetStub, unittest.TestCase):
@@ -708,7 +738,14 @@ class TestConfig(unittest.TestCase):
                        "SOURCE": "router", "WRITE_ALL": False,
                        "MAX_ADDRS": 2, "IFACE": "eth0"}, f)
         ov = st_mod.load_overlay(path)
-        self.assertEqual(ov, {"ROUTER_HOST": "10.0.0.9", "ENTRY_NAME": "MyNAS"})
+        # 已删的项被忽略；ENTRY_NAME 则迁移成 RULES，用户的配置不能丢
+        self.assertEqual(ov.get("ROUTER_HOST"), "10.0.0.9")
+        self.assertNotIn("SOURCE", ov)
+        self.assertNotIn("WRITE_ALL", ov)
+        self.assertNotIn("MAX_ADDRS", ov)
+        self.assertNotIn("IFACE", ov)
+        self.assertEqual(ov["RULES"], [{"name": "MyNAS", "mac": "",
+                                        "port": "-1", "remote_ip": "::/0"}])
         cfg = Config(rules=[Rule(name="NAS")])
         st_mod.apply_overlay(cfg, ov)
         self.assertEqual(cfg.host, "10.0.0.9")
@@ -723,15 +760,15 @@ class TestConfig(unittest.TestCase):
         self.assertIn("SOURCE", str(cm.exception))
 
     def test_page_exposes_only_the_fixed_flow(self):
-        """页面上不该再出现取址开关 —— 流程已固定，留着只会让人迷糊。"""
+        """页面上不该再出现取址开关与旧条目表单 —— 规则统一在白名单页管理。"""
         from app import settings as st_mod
         keys = {f["key"] for g in st_mod.view(Config(), {})
                 for f in g["fields"]}
         for gone in ("SOURCE", "MISMATCH_POLICY", "WRITE_ALL", "MAX_ADDRS",
-                     "ADDR_SUFFIX", "IFACE", "TARGET_HOSTNAME", "ALLOW_ULA"):
+                     "ADDR_SUFFIX", "IFACE", "TARGET_HOSTNAME", "ALLOW_ULA",
+                     "TARGET_MAC", "ENTRY_NAME", "PORT", "REMOTE_IP"):
             self.assertNotIn(gone, keys)
-        for kept in ("ROUTER_HOST", "ROUTER_PASSWORD", "TARGET_MAC",
-                     "POLL_INTERVAL", "ENTRY_NAME", "PORT", "REMOTE_IP",
+        for kept in ("ROUTER_HOST", "ROUTER_PASSWORD", "POLL_INTERVAL",
                      "DRY_RUN", "LOG_LEVEL"):
             self.assertIn(kept, keys)
 
@@ -814,6 +851,22 @@ class TestCounters(unittest.TestCase):
         self.assertEqual(c.removed, 2)
         self.assertEqual(c.total_writes, 0)
         self.assertEqual(st.Counters(self.path).removed, 2)
+
+    def test_reset_zeroes_everything_and_persists(self):
+        """网页「重置累计写入」：清零要落盘，重启后不会从旧文件里复活。"""
+        from app import state as st
+        c = st.Counters(self.path)
+        c.bump(created=5, removed=3)
+        c.flush()
+        c.reset()
+        self.assertEqual(c.total_writes, 0)
+        self.assertEqual(c.removed, 0)
+        self.assertEqual(c.session_writes, 0)
+        self.assertFalse(c.first_write_at and c.last_write_at)
+        self.assertTrue(c.flush())
+        c2 = st.Counters(self.path)
+        self.assertEqual(c2.total_writes, 0)
+        self.assertEqual(c2.removed, 0)
 
     def test_bump_nothing_is_noop(self):
         from app import state as st
@@ -914,6 +967,69 @@ class TestStatusSnapshot(LocalNetStub, unittest.TestCase):
         s.tick()
         self.assertEqual(s.counters.removed, 1)
         self.assertEqual(s.total_writes, 1)         # 只算了新建的那 1 条
+
+
+class TestEvents(unittest.TestCase):
+    """修改日志：文件即数据 —— 追加/读取/裁剪/清空，坏行跳过不致命。"""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp(prefix="evtest-")
+        self.state = os.path.join(self.dir, "state.json")
+
+    def test_record_and_read_roundtrip(self):
+        from app import events
+        events.record(self.state, {"device": "NAS", "action": "created",
+                                   "entry": "NAS", "addr": "240e::1"}, 100)
+        events.record(self.state, {"device": "NAS", "action": "removed",
+                                   "entry": "NAS@2", "addr": "240e::2"}, 100)
+        got = events.read(self.state)
+        self.assertEqual([g["action"] for g in got], ["created", "removed"])
+        self.assertTrue(all(g.get("ts") for g in got))   # 落盘时补了时间戳
+
+    def test_trim_keeps_latest(self):
+        from app import events
+        for i in range(7):
+            events.record(self.state, {"device": "d", "addr": f"240e::{i}"}, 5)
+        got = events.read(self.state)
+        self.assertEqual(len(got), 5)
+        self.assertEqual(got[0]["addr"], "240e::2")       # 最旧的两条被丢
+        self.assertEqual(got[-1]["addr"], "240e::6")
+
+    def test_clear_and_corrupt_line_skipped(self):
+        from app import events
+        events.record(self.state, {"device": "d"}, 100)
+        # 手工塞进半行（模拟掉电残留）
+        with open(events.events_path(self.state), "a", encoding="utf-8") as f:
+            f.write('{"device": "broken"')
+        got = events.read(self.state)
+        self.assertEqual(len(got), 1)
+        events.clear(self.state)
+        self.assertEqual(events.read(self.state), [])
+
+    def test_sync_writes_events_on_change(self):
+        """同步引擎真实写入时必须留下修改日志（含更新的旧地址）。"""
+        from app import events
+        r = FakeRouter(entries=[])
+        cfg = make_cfg()
+        self.patch_local([OLD_ADDR])
+        s = Syncer(cfg, r)
+        s.trigger = "手动同步"
+        s.tick()
+        got = events.read(cfg.state_file)
+        self.assertTrue(got)
+        ev = [g for g in got if g.get("device") == "NAS"]
+        self.assertTrue(ev)
+        self.assertEqual(ev[0]["action"], "created")
+        self.assertEqual(ev[0]["trigger"], "手动同步")
+
+    def patch_local(self, addrs, macs=None, temp=None):
+        """与 TestSyncer.patch_local 相同的「网卡上有什么」改写。"""
+        discover.local_candidates = (
+            lambda: [discover.canon(a) or a for a in addrs])
+        discover.temporary_set = lambda: set(temp or ())
+        if macs is not None:
+            discover.local_macs = lambda: set(macs)
 
 
 if __name__ == "__main__":

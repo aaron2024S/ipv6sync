@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import ipaddress
 import tempfile
 from dataclasses import dataclass, field
 
@@ -50,6 +51,7 @@ class Field:
     max: object = None
     placeholder: str = ""
     secret: bool = False           # 不回显值，只回显"是否已设置"
+    hidden: bool = False           # 不出现在设置表单里（在别的页面编辑，如 LOG_MAX）
 
     def to_dict(self, value, source: str):
         d = {
@@ -72,8 +74,6 @@ class Field:
 
 
 G_ROUTER = "路由器连接"
-G_DISCOVER = "地址检测"
-G_ENTRY = "白名单条目"
 G_BEHAVIOR = "运行行为"
 G_NOTIFY = "通知设置"
 
@@ -91,33 +91,27 @@ FIELDS: tuple = (
           help="改这里会以明文写入 settings.json（0600）；连续 3 次错会锁账号，务必一次填对"),
     Field("ROUTER_TIMEOUT", "请求超时（秒）", G_ROUTER, "float", "10",
           attr="timeout", min=1, max=120),
-    # ---- 地址检测（流程固定：读本机网卡 → 和白名单比 → 有变化才更新） ----
-    Field("POLL_INTERVAL", "检测周期（秒）", G_DISCOVER, "int", "60",
+    Field("POLL_INTERVAL", "检测周期（秒）", G_ROUTER, "int", "60",
           attr="poll_interval", min=10, max=86400,
           help="多久检查一次地址变化；地址没变不会写路由器，所以调小也不折腾 flash"),
-    Field("TARGET_MAC", "本机网卡 MAC（可不填）", G_DISCOVER, "str", "",
-          attr="mac", placeholder="aa:bb:cc:dd:ee:ff",
-          help="本程序只读「这台机器」的网卡地址（所以容器必须用 host 网络）。"
-               "填了 MAC 就核对一下：不在这台机器的网卡上时会记一条告警到日志，"
-               "提醒你可能写错放行对象了。不填不影响同步"),
-    # ---- 白名单条目 ----
-    Field("ENTRY_NAME", "条目名称", G_ENTRY, "str", "NAS",
-          rule_attr="name", help="稳定主键：同名则原地更新，不会越加越多（上限 32 条）"),
-    Field("PORT", "放行端口", G_ENTRY, "str", "-1", rule_attr="port",
-          placeholder="-1 或 16667,5005,22",
-          help="多个端口用英文逗号分隔，每台端口生成一条白名单条目；-1 或留空 = 全部端口"),
-    Field("REMOTE_IP", "允许的来源", G_ENTRY, "str", "::/0",
-          rule_attr="remote_ip", help="::/0 = 不限制来源"),
+    # 白名单条目不再走这里的表单：网页「IPv6 防火墙白名单」卡里按设备添加
+    # （存在 overlay 的 RULES 键里）；ENTRY_NAME / PORT / REMOTE_IP / TARGET_MAC
+    # 环境变量仍兼容，读取时自动迁移成 RULES（见 _migrate_legacy_rules）。
     # ---- 运行行为 ----
     Field("ENSURE_FIREWALL_ON", "自动打开 IPv6 防火墙总开关", G_BEHAVIOR, "bool",
           "false", attr="ensure_firewall_on",
-          help="总开关关着时白名单不生效；设为 true 后本程序会自动打开它"),
+          help="总开关关着时白名单不生效，本程序待机不写入；勾选后每轮发现开关"
+               "是关的会自动打开再同步（注意：网页上手动关掉的开关，下一轮也会被它重新打开）"),
     Field("VERIFY_AFTER_WRITE", "写完回读核对", G_BEHAVIOR, "bool", "true",
           attr="verify_after_write"),
     Field("DRY_RUN", "演练模式（只打印不写入）", G_BEHAVIOR, "bool", "false",
           attr="dry_run"),
     Field("LOG_LEVEL", "日志级别", G_BEHAVIOR, "select", "INFO",
           attr="log_level", choices=LOG_LEVELS),
+    # 同步记录保留条数：设置表单里不露出（hidden），在「同步记录」页的工具行里调，
+    # 避免同一项出现在两个页面造成两处真相。
+    Field("LOG_MAX", "同步记录保留条数", G_BEHAVIOR, "int", "100",
+          attr="events_max", min=10, max=5000, hidden=True),
     # ---- 通知设置（三渠道互相独立，启用几个就同时推几个） ----
     Field("NOTIFY_TITLE", "通知标题", G_NOTIFY, "str", "IPv6 白名单已更新",
           attr="notify_title",
@@ -148,7 +142,7 @@ FIELDS: tuple = (
 )
 
 BY_KEY = {f.key: f for f in FIELDS}
-GROUPS = (G_ROUTER, G_DISCOVER, G_ENTRY, G_BEHAVIOR, G_NOTIFY)
+GROUPS = (G_ROUTER, G_BEHAVIOR, G_NOTIFY)
 
 
 # --------------------------------------------------------------------------
@@ -157,6 +151,78 @@ GROUPS = (G_ROUTER, G_DISCOVER, G_ENTRY, G_BEHAVIOR, G_NOTIFY)
 
 _TRUE = ("1", "true", "yes", "y", "on")
 _FALSE = ("0", "false", "no", "n", "off")
+
+# 白名单自动维护规则（网页「IPv6 防火墙白名单」卡管理）在 overlay 里的键。
+# 不进 FIELDS 表单 —— 它是列表结构，由白名单页的弹窗增删改。
+RULES_KEY = "RULES"
+
+# 旧版本把单条规则摊在四个扁平键里（网页表单 + 环境变量），已全部下线；
+# 读设置文件时自动迁移成 RULES，绝不能让用户此前填的配置悄悄丢失。
+_LEGACY_RULE_KEYS = ("ENTRY_NAME", "PORT", "REMOTE_IP", "TARGET_MAC")
+
+
+def _validate_rules(items, strict: bool = False) -> list:
+    """校验 RULES 列表，返回规范化后的规则字典列表。
+
+    strict=True（网页提交）：坏规则整体报错；
+    strict=False（读设置文件）：坏项跳过并记日志，其余照常生效。
+    """
+    if not isinstance(items, list):
+        raise SettingsError("RULES 必须是数组")
+    out: list = []
+    seen: set = set()
+    for it in items:
+        try:
+            if not isinstance(it, dict):
+                raise SettingsError("规则项必须是对象")
+            name = str(it.get("name") or "").strip()
+            if not name:
+                raise SettingsError("规则缺少服务名称")
+            if len(name) > 48:
+                raise SettingsError(f"服务名称 {name!r} 超过 48 个字符")
+            if name in seen:
+                raise SettingsError(f"服务名称重复：{name}")
+            seen.add(name)
+            mac = str(it.get("mac") or "").strip()
+            port = str(it.get("port", "-1") or "-1").strip().replace("，", ",")
+            if port not in ("", "-1"):
+                for tok in port.split(","):
+                    tok = tok.strip()
+                    if not tok.isdigit() or not 1 <= int(tok) <= 65535:
+                        raise SettingsError(
+                            f"规则 {name} 的放行端口 {tok!r} 不合法"
+                            "（每个 1-65535，或 -1 表示全部）")
+            remote = str(it.get("remote_ip") or "::/0").strip() or "::/0"
+            try:
+                ipaddress.ip_network(remote, strict=False)
+            except ValueError:
+                raise SettingsError(
+                    f"规则 {name} 的允许来源 {remote!r} 不是合法网段或地址")
+            out.append({"name": name, "mac": mac, "port": port or "-1",
+                        "remote_ip": remote})
+        except SettingsError as e:
+            if strict:
+                raise
+            log.warning("忽略设置文件里不合法的规则项 %s：%s", it, e)
+    return out
+
+
+def _migrate_legacy_rules(data: dict) -> dict:
+    """旧版的 ENTRY_NAME / PORT / REMOTE_IP / TARGET_MAC → RULES（一次性）。"""
+    if not isinstance(data, dict) or RULES_KEY in data:
+        return data
+    if not any(k in data for k in _LEGACY_RULE_KEYS):
+        return data
+    data = dict(data)
+    data[RULES_KEY] = [{
+        "name": str(data.get("ENTRY_NAME") or "").strip() or "NAS",
+        "mac": str(data.get("TARGET_MAC") or "").strip(),
+        "port": str(data.get("PORT") or "-1"),
+        "remote_ip": str(data.get("REMOTE_IP") or "::/0"),
+    }]
+    log.info("检测到旧版条目设置（%s），已迁移为 RULES 规则列表",
+             "/".join(k for k in _LEGACY_RULE_KEYS if k in data))
+    return data
 
 
 def coerce(f: Field, raw):
@@ -224,13 +290,16 @@ def validate_overlay(data: dict, strict: bool = True) -> dict:
     if not isinstance(data, dict):
         raise SettingsError("提交的内容不是一个对象")
     out: dict = {}
-    unknown = [k for k in data if k not in BY_KEY]
+    unknown = [k for k in data if k not in BY_KEY and k != RULES_KEY]
     if unknown and strict:
         raise SettingsError("不认识的设置项：" + ", ".join(sorted(unknown)))
     if unknown:
         log.warning("忽略设置文件里本版本已不存在的项：%s",
                     ", ".join(sorted(unknown)))
     for k, v in data.items():
+        if k == RULES_KEY:
+            out[RULES_KEY] = _validate_rules(v, strict)
+            continue
         f = BY_KEY.get(k)
         if f is None:              # 非严格路径才会走到：旧版本残留项
             continue
@@ -296,7 +365,7 @@ def load_overlay(path: str | None = None) -> dict:
         return {}
     try:
         # 非严格模式：未知键（旧版本残留）与个别坏值只跳过，不让整份文件失效
-        return validate_overlay(data, strict=False)
+        return validate_overlay(_migrate_legacy_rules(data), strict=False)
     except SettingsError as e:
         log.warning("设置文件 %s 里有不合法项（%s），忽略整份文件", path, e)
         return {}
@@ -345,7 +414,17 @@ def apply_overlay(cfg, overlay: dict) -> None:
     if not overlay:
         return
     for key, val in overlay.items():
-        f = BY_KEY[key]
+        if key == RULES_KEY:
+            # 网页白名单页维护的规则列表：整表替换（含空表 —— 用户删光规则
+            # 就该同步为空，否则环境变量里的默认规则会"复活"）
+            from .config import Rule
+            cfg.rules = [Rule(name=r["name"], mac=r["mac"] or None,
+                              port=None if r["port"] in ("", "-1") else r["port"],
+                              remote_ip=r["remote_ip"]) for r in (val or [])]
+            continue
+        f = BY_KEY.get(key)
+        if f is None:
+            continue          # RULES 之外的未知键理论上已被校验层挡掉，兜底跳过
         if f.secret:
             cfg.password = str(val)
             cfg.password_source = f"网页设置（{settings_path()}）"
@@ -379,7 +458,7 @@ def view(cfg, overlay: dict) -> list:
     for g in GROUPS:
         items = []
         for f in FIELDS:
-            if f.group != g:
+            if f.group != g or f.hidden:
                 continue
             if f.rule_attr:
                 val = ""

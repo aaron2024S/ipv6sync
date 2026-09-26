@@ -25,10 +25,12 @@ OLD_ADDR = "240e:3a4:48ff:6d10:7173:1ffc:64ed:82c0"
 
 
 def make_cfg(**kw) -> Config:
+    # mac=None = 本机网卡取址路径（_LocalNetStub 已装好假网卡）；
+    # 绑 MAC 的设备规则另有专属测试。
     cfg = Config(
         host="192.168.3.1", username="admin", password="x",
         session_file=None, poll_interval=1,
-        rules=[Rule(name="NAS", port=None, remote_ip="::/0", mac=NAS_MAC)],
+        rules=[Rule(name="NAS", port=None, remote_ip="::/0", mac=None)],
     )
     for k, v in kw.items():
         setattr(cfg, k, v)
