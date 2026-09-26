@@ -277,8 +277,10 @@ class FakeRouter:
                      "RemoteIp": "::/0", "Port": 16669, "ID": "…Trustlist.1."}]
         if name == "HostInfo":
             return [{"MACAddress": "00:11:22:AA:BB:CC", "HostName": "<b>名字</b>",
-                     "IPAddress": "192.168.3.5",
+                     "IPAddress": "192.168.3.5", "Active": 1,
                      "Ipv6Addrs": [{"Ipv6Addr": "240e:3a4:48ff:6d10::1"}]}]
+        if name == "ntwk/wlanfilterenhance":
+            return []
         raise AssertionError(name)
 
     def post(self, name, data=None, wrapped=True, action=None):
@@ -338,7 +340,10 @@ class FakeNode:
         return {"ok": True, "hosts": [{"mac": "00:11:22:AA:BB:CC",
                                        "name": "<b>名字</b>",
                                        "ipv4": "192.168.3.5",
-                                       "ipv6": ["240e:3a4:48ff:6d10::1"]}],
+                                       "ipv6": ["240e:3a4:48ff:6d10::1"],
+                                       "active": True, "offline_at": "",
+                                       "kids": False}],
+                "blacklist": [], "blacklist_error": "",
                 "lan_prefixes": ["240e:3a4:48ff:6d10::/64"]}
 
     def set_firewall(self, on):
@@ -751,6 +756,109 @@ class WebUIDisabledTest(unittest.TestCase):
         ui._tokens[tok] = ("admin", 1.0)     # 手动过期
         self.assertIsNone(ui._valid(tok))
         self.assertNotIn(tok, ui._tokens)    # 顺便清掉
+
+
+# ==========================================================================
+# 4. Node.hosts：在线/离线拆分、儿童上网标记、黑名单解析
+# ==========================================================================
+
+class NodeHostsTest(EnvSandbox):
+    """Node.hosts() 的数据整形逻辑（用假路由器，不联网）。"""
+
+    class FakeR:
+        def __init__(self, wlan=None):
+            self.logged_in = True
+            self.wlan = wlan if wlan is not None else [
+                {"WifiModulename": "WIFI-2.4G",
+                 "BMACAddresses": [{"MACAddress": "04:F1:28:1A:01:73",
+                                    "HostName": "诺基亚6"}]},
+                {"WifiModulename": "WIFI-5G",
+                 "BMACAddresses": [{"MACAddress": "04:F1:28:1A:01:73",
+                                    "HostName": "诺基亚6"}]},
+            ]
+
+        def check_session(self):
+            return True
+
+        def get(self, name, params=None):
+            if name == "HostInfo":
+                return [
+                    {"MACAddress": "AA:00:00:00:00:01", "HostName": "小爱音响",
+                     "IPAddress": "192.168.3.31", "Active": 1,
+                     "ParentControlEnable": 1, "MacFilterID": "3",
+                     "Ipv6Addrs": [{"Ipv6Addr": "240e:3a4::a1"}]},
+                    {"MACAddress": "AA:00:00:00:00:02", "HostName": "旧电脑",
+                     "IPAddress": "192.168.3.9", "Active": "0",
+                     "OfflineRecord": "2026-09-26 15:42:10#0#1"},
+                    {"MACAddress": "AA:00:00:00:00:03", "HostName": "普通机",
+                     "IPAddress": "192.168.3.11", "Active": True,
+                     "MacFilterID": ""},
+                ]
+            if name == "ntwk/wlanfilterenhance":
+                return self.wlan
+            raise AssertionError(name)
+
+    def make(self, **kw) -> Node:
+        node = Node.__new__(Node)
+        cfg = Config(host="192.168.3.1", username="admin", password="x",
+                     session_file=None, rules=[])
+        router = self.FakeR(**kw)
+        node.syncer = Syncer(cfg, router)
+        node.router = router
+        return node
+
+    def test_active_offline_kids_fields(self):
+        res = self.make().hosts()
+        self.assertTrue(res["ok"])
+        by = {h["mac"]: h for h in res["hosts"]}
+        self.assertTrue(by["AA:00:00:00:00:01"]["active"])
+        self.assertTrue(by["AA:00:00:00:00:01"]["kids"], "ParentControlEnable=1 应判定为儿童上网")
+        off = by["AA:00:00:00:00:02"]
+        self.assertFalse(off["active"], "Active='0'（字符串）不能误判为在线")
+        self.assertEqual(off["offline_at"], "2026-09-26 15:42:10")
+        self.assertFalse(by["AA:00:00:00:00:03"]["kids"], "MacFilterID 为空不算儿童上网")
+
+    def test_blacklist_merged_across_bands(self):
+        res = self.make().hosts()
+        self.assertEqual(len(res["blacklist"]), 1, "同一 MAC 跨 2.4G/5G 应合并去重")
+        b = res["blacklist"][0]
+        self.assertEqual(b["mac"], "04:F1:28:1A:01:73")
+        self.assertEqual(b["name"], "诺基亚6")
+        self.assertIn("+", b["band"], "两个频段都拦时应拼在一起")
+
+    def test_blacklist_failure_does_not_break_hosts(self):
+        node = self.make()
+        router = node.syncer.router
+        orig_get = router.get
+
+        def boom(name, params=None):
+            if name == "ntwk/wlanfilterenhance":
+                from app.router import RouterError
+                raise RouterError("模拟黑名单接口挂了")
+            return orig_get(name, params)
+
+        router.get = boom
+        res = node.hosts()
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["blacklist"], [])
+        self.assertIn("模拟", res["blacklist_error"])
+
+    def test_blacklist_tolerates_odd_shapes(self):
+        from app.node import _parse_blacklist
+        # 纯 MAC 字符串条目
+        self.assertEqual(
+            [r["mac"] for r in _parse_blacklist(
+                {"BMACAddresses": [" aa:bb:cc:dd:ee:ff "]})],
+            ["AA:BB:CC:DD:EE:FF"])
+        # 再包一层字典 + 单数键名
+        self.assertEqual(
+            [r["mac"] for r in _parse_blacklist(
+                [{"BMACAddresses": {"BMACAddress":
+                    [{"MACAddress": "11:22:33:44:55:66"}]}}])],
+            ["11:22:33:44:55:66"])
+        # 空响应
+        self.assertEqual(_parse_blacklist(None), [])
+        self.assertEqual(_parse_blacklist({}), [])
 
 
 if __name__ == "__main__":

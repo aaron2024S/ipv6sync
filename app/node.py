@@ -31,6 +31,87 @@ def make_router(cfg) -> HuaweiRouter:
                         timeout=cfg.timeout)
 
 
+def _truthy(v) -> bool:
+    """固件的开关字段可能是 bool / 1 / "0" / "false" 等各种形态，统一判定。
+
+    注意 bool("0") 是 True，直接 bool() 会把固件用字符串表示的「关」误判成开。
+    """
+    if isinstance(v, bool):
+        return v
+    return str(v or "").strip().lower() not in ("", "0", "false", "off", "no", "none")
+
+
+def _is_kid(h: dict) -> bool:
+    """该设备是否被路由器「儿童上网保护」管控。
+
+    HostInfo 里带管控标记的字段有两个（固件版本不同留哪个不定）：
+    ParentControlEnable（开关）与 MacFilterID（管控档案 ID，空/"0" 表示未加入）。
+    """
+    if _truthy(h.get("ParentControlEnable")):
+        return True
+    mfid = str(h.get("MacFilterID") or "").strip()
+    return mfid not in ("", "0")
+
+
+def _parse_blacklist(res) -> list:
+    """从 wlanfilterenhance 响应里抽 WiFi MAC 黑名单（2.4G/5G 各一份，合并去重）。
+
+    固件返回结构随版本变化（整体是列表还是字典、条目是对象还是纯 MAC 字符串
+    都可能），这里做宽容解析：递归找键名含 BMAC 的字段，条目尽量带出主机名
+    和频段。同名 MAC 跨频段重复出现时合并为一行，频段用 "+" 拼接。
+    """
+    rows: dict[str, dict] = {}
+
+    def band_label(node: dict, fallback: str) -> str:
+        for k in ("WifiModulename", "wifiModulename", "FrequencyBand",
+                  "WifiBand", "Band", "band"):
+            v = node.get(k)
+            if v:
+                return str(v)
+        return fallback
+
+    def add(mac, name, band: str):
+        mac = str(mac or "").strip().upper()
+        if not mac:
+            return
+        cur = rows.setdefault(mac, {"mac": mac, "name": "", "band": ""})
+        if name and not cur["name"]:
+            cur["name"] = str(name)
+        if band and band not in cur["band"]:
+            cur["band"] = (cur["band"] + "+" + band) if cur["band"] else band
+
+    def walk(node, band: str):
+        if isinstance(node, list):
+            for x in node:
+                walk(x, band)
+            return
+        if not isinstance(node, dict):
+            return
+        b = band_label(node, band)
+        for key, val in node.items():
+            if "bmac" in str(key).lower():
+                entries = val
+                if isinstance(entries, dict):      # 个别固件再包一层字典
+                    entries = [v for v in entries.values() if isinstance(v, list)]
+                    entries = [e for lst in entries for e in lst]
+                if isinstance(entries, str):
+                    entries = [entries]
+                for e in entries if isinstance(entries, list) else []:
+                    if isinstance(e, dict):
+                        mac = (e.get("MACAddress") or e.get("MacAddress")
+                               or e.get("BMACAddress") or e.get("mac"))
+                        name = (e.get("HostName") or e.get("hostname")
+                                or e.get("devName") or e.get("DeviceName"))
+                        add(mac, name or "", b)
+                    else:
+                        add(e, "", b)
+            else:
+                walk(val, b)
+
+    walk(res, "")
+    return sorted(rows.values(), key=lambda r: r["mac"])
+
+
 class Node:
     def __init__(self, cfg):
         self.settings_file = cfg.settings_file or st.settings_path()
@@ -209,7 +290,7 @@ class Node:
                 "error": "; ".join(failed)}
 
     def hosts(self) -> dict:
-        """在线设备列表（用来查 TARGET_MAC）。"""
+        """设备列表（在线/离线/儿童上网 + WiFi 黑名单）。"""
         with self.syncer.lock:
             err = self._logged_in()
             if err:
@@ -221,12 +302,25 @@ class Node:
             rows = []
             for h in raw:
                 addrs = discover.host_candidates(h)
+                offline_at = (h.get("OfflineRecord") or "").split("#")[0].strip()
+                active = _truthy(h.get("Active"))
                 rows.append({
                     "mac": h.get("MACAddress", "") or "",
                     "name": (h.get("HostName") or h.get("ActualName") or "")[:48],
                     "ipv4": h.get("IPAddress", "") or "",
                     "ipv6": addrs,
+                    "active": active,
+                    "offline_at": offline_at if (offline_at and not active) else "",
+                    "kids": _is_kid(h),
                 })
             rows.sort(key=lambda r: r["mac"])
+            # 黑名单是另一个接口（wlanfilterenhance），失败不拖累设备列表本身
+            try:
+                blacklist = _parse_blacklist(
+                    self.router.get("ntwk/wlanfilterenhance"))
+                bl_error = ""
+            except RouterError as e:
+                blacklist, bl_error = [], str(e)
             return {"ok": True, "hosts": rows,
+                    "blacklist": blacklist, "blacklist_error": bl_error,
                     "lan_prefixes": discover.lan_prefixes(self.router)}

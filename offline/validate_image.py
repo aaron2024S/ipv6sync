@@ -37,7 +37,7 @@ DIST_DIR = os.path.join(HERE, "dist")
 IMAGE = "ipv6sync"
 
 
-def _read_version(fallback: str = "1.0.6") -> str:
+def _read_version(fallback: str = "1.0.7") -> str:
     """版本号唯一来源是 app/__init__.py，避免发版时多处硬编码漏改。"""
     try:
         with open(os.path.join(PROJECT, "app", "__init__.py"),

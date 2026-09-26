@@ -141,6 +141,17 @@ tr:last-child td{border-bottom:none}
 .toast.ok{border-color:var(--ok);color:var(--ok)}
 .toast.err{border-color:var(--err);color:var(--err)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+/* 设备列表页内的二级页签（在线/离线/黑名单/儿童上网） */
+.subtabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+.subtab{background:transparent;border:none;border-bottom:2px solid transparent;border-radius:0;
+  padding:7px 12px;font-size:12.5px;color:var(--muted);cursor:pointer}
+.subtab:hover{color:var(--accent)}
+.subtab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.subtab .cnt{display:inline-block;min-width:16px;text-align:center;font-size:11px;border-radius:9px;
+  padding:0 5px;margin-left:3px;background:var(--bg);color:var(--muted);border:1px solid var(--line)}
+.subtab.active .cnt{color:var(--accent);border-color:var(--accent)}
+tr.offrow td{opacity:.62}
+.devnote{color:var(--muted);font-size:12px;margin:10px 0 0}
 </style>
 </head>
 <body>
@@ -174,7 +185,7 @@ tr:last-child td{border-bottom:none}
 
   <nav class="tabs" role="tablist">
     <button class="tab active" id="tabbtn-main" data-tab="main">同步与设置</button>
-    <button class="tab" id="tabbtn-devices" data-tab="devices">在线设备</button>
+    <button class="tab" id="tabbtn-devices" data-tab="devices">设备列表</button>
     <button class="tab" id="tabbtn-notify" data-tab="notify">通知设置</button>
     <button class="tab" id="tabbtn-status" data-tab="status">运行状态</button>
     <button class="tab" id="tabbtn-about" data-tab="about">关于</button>
@@ -202,10 +213,20 @@ tr:last-child td{border-bottom:none}
 
   <div id="tab-devices" class="hide">
     <div class="card">
-      <h2>在线设备<button id="btnHosts" class="primary hbtn">刷新设备列表</button></h2>
-      <p class="desc" id="hostsDesc">进入页面已自动加载；点右上「刷新设备列表」重新获取，把 NAS 的 MAC 填进
-        「目标设备 MAC」即可精确定位。</p>
-      <div id="hostsBox"></div>
+      <h2>设备列表<button id="btnHosts" class="primary hbtn">刷新设备列表</button></h2>
+      <p class="desc" id="hostsDesc">进入页面已自动加载；点右上「刷新设备列表」重新获取。把 NAS 的 MAC 填进
+        「目标设备 MAC」即可精确定位。在线/离线/儿童上网来自路由器设备档案（HostInfo），
+        黑名单来自 WiFi MAC 过滤配置（wlanfilterenhance）。</p>
+      <div class="subtabs" role="tablist">
+        <button class="subtab active" id="devtab-online" type="button">在线设备<span class="cnt" id="cnt-online">0</span></button>
+        <button class="subtab" id="devtab-offline" type="button">离线设备<span class="cnt" id="cnt-offline">0</span></button>
+        <button class="subtab" id="devtab-black" type="button">黑名单<span class="cnt" id="cnt-black">0</span></button>
+        <button class="subtab" id="devtab-kids" type="button">儿童上网<span class="cnt" id="cnt-kids">0</span></button>
+      </div>
+      <div id="devbox-online"></div>
+      <div id="devbox-offline" class="hide"></div>
+      <div id="devbox-black" class="hide"></div>
+      <div id="devbox-kids" class="hide"></div>
     </div>
   </div><!-- /tab-devices -->
 
@@ -747,6 +768,17 @@ tr:last-child td{border-bottom:none}
   document.getElementById("tabbtn-status").addEventListener("click", function () { switchTab("status"); });
   document.getElementById("tabbtn-about").addEventListener("click", function () { switchTab("about"); });
 
+  // 设备列表页内的二级页签：在线 / 离线 / 黑名单 / 儿童上网
+  var DEV_TABS = ["online", "offline", "black", "kids"];
+  DEV_TABS.forEach(function (k) {
+    document.getElementById("devtab-" + k).addEventListener("click", function () {
+      DEV_TABS.forEach(function (x) {
+        document.getElementById("devtab-" + x).classList.toggle("active", x === k);
+        document.getElementById("devbox-" + x).classList.toggle("hide", x !== k);
+      });
+    });
+  });
+
   function loadHosts() {
     var btn = document.getElementById("btnHosts");
     btn.disabled = true;
@@ -754,32 +786,96 @@ tr:last-child td{border-bottom:none}
       showOut("设备列表", j);
       if (!j.ok) { toast("刷新设备列表失败：" + (j.error || ""), "err"); return; }
       hostsLoaded = true;
-      var box = document.getElementById("hostsBox");
-      box.textContent = "";
-      var t = document.createElement("table");
-      var head = document.createElement("tr");
-      ["MAC（填 TARGET_MAC）", "主机名", "IPv4", "当前 IPv6"].forEach(function (h) {
-        var th = document.createElement("th"); th.textContent = h; head.appendChild(th);
-      });
-      t.appendChild(head);
-      j.hosts.forEach(function (h) {
+      var hosts = j.hosts || [];
+      var online = hosts.filter(function (h) { return h.active; });
+      var offline = hosts.filter(function (h) { return !h.active; });
+      var kids = hosts.filter(function (h) { return h.kids; });
+      var black = j.blacklist || [];
+      document.getElementById("cnt-online").textContent = online.length;
+      document.getElementById("cnt-offline").textContent = offline.length;
+      document.getElementById("cnt-black").textContent = black.length;
+      document.getElementById("cnt-kids").textContent = kids.length;
+      document.getElementById("hostsDesc").textContent = "在线 " + online.length +
+        " · 离线 " + offline.length + " · 黑名单 " + black.length +
+        " · 儿童上网 " + kids.length +
+        "　当前 LAN 前缀：" + ((j.lan_prefixes || []).join(", ") || "（无）") +
+        (j.blacklist_error ? "　（黑名单读取失败：" + j.blacklist_error + "）" : "");
+
+      // 所有动态文本一律 textContent 写入（主机名是不可信输入，防 XSS）
+      function mkTable(heads) {
+        var t = document.createElement("table");
+        var hr = document.createElement("tr");
+        heads.forEach(function (h) {
+          var th = document.createElement("th"); th.textContent = h; hr.appendChild(th);
+        });
+        t.appendChild(hr);
+        return t;
+      }
+      function addRow(t, cells, monoCols, rowCls) {
         var tr = document.createElement("tr");
-        [h.mac, h.name, h.ipv4, (h.ipv6 || []).join(", ") || "（无全局 IPv6）"]
-          .forEach(function (v) {
-            var td = document.createElement("td");
-            td.textContent = v;
-            if (v === h.mac) { td.className = "mono"; }
-            tr.appendChild(td);
-          });
+        if (rowCls) { tr.className = rowCls; }
+        cells.forEach(function (v, i) {
+          var td = document.createElement("td");
+          td.textContent = (v === null || v === undefined || v === "") ? "—" : v;
+          if (monoCols.indexOf(i) >= 0) { td.className = "mono"; }
+          tr.appendChild(td);
+        });
         t.appendChild(tr);
+        return tr;
+      }
+      // 表格套横向滚动容器；没有数据时显示一行占位说明
+      function mount(boxId, t, emptyText, note) {
+        var box = document.getElementById(boxId);
+        box.textContent = "";
+        if (t.rows.length > 1) {
+          var sc = document.createElement("div");
+          sc.className = "tblwrap";
+          sc.appendChild(t);
+          box.appendChild(sc);
+        } else {
+          var p = document.createElement("p");
+          p.className = "devnote";
+          p.textContent = emptyText;
+          box.appendChild(p);
+        }
+        if (note) {
+          var n = document.createElement("p");
+          n.className = "devnote";
+          n.textContent = note;
+          box.appendChild(n);
+        }
+      }
+
+      var t1 = mkTable(["MAC（填 TARGET_MAC）", "主机名", "IPv4", "当前 IPv6"]);
+      online.forEach(function (h) {
+        addRow(t1, [h.mac, h.name, h.ipv4,
+          (h.ipv6 || []).join(", ") || "（无全局 IPv6）"], [0]);
       });
-      // 套横向滚动容器：手机窄屏上表格整体横滑，不换行、不撑出卡片
-      var sc = document.createElement("div");
-      sc.className = "tblwrap";
-      sc.appendChild(t);
-      box.appendChild(sc);
-      document.getElementById("hostsDesc").textContent = "共 " + j.hosts.length +
-        " 台设备；当前 LAN 前缀：" + ((j.lan_prefixes || []).join(", ") || "（无）");
+      mount("devbox-online", t1, "当前没有在线设备。");
+
+      var t2 = mkTable(["MAC", "主机名", "IPv4", "最后在线"]);
+      offline.forEach(function (h) {
+        addRow(t2, [h.mac, h.name, h.ipv4, h.offline_at || "（未知）"], [0], "offrow");
+      });
+      mount("devbox-offline", t2, "当前没有离线记录。",
+        "离线设备保留痕迹，按最后在线时间排列，方便回头找 MAC。");
+
+      var t3 = mkTable(["主机名", "MAC", "拦截频段"]);
+      black.forEach(function (b) {
+        var tr = addRow(t3, [b.name || "（未知名）", b.mac, b.band || ""], [1]);
+        tr.style.color = "var(--err)";
+      });
+      mount("devbox-black", t3, "黑名单是空的（没有设备被 WiFi 拦截）。",
+        "来自路由器 WiFi MAC 过滤黑名单，只读展示；增删请到路由器管理页操作。");
+
+      var t4 = mkTable(["主机名", "MAC", "当前 IPv6", "状态"]);
+      kids.forEach(function (h) {
+        addRow(t4, [h.name, h.mac,
+          (h.ipv6 || []).join(", ") || "",
+          h.active ? "在线" : ("离线" + (h.offline_at ? " · " + h.offline_at : ""))], [1]);
+      });
+      mount("devbox-kids", t4, "没有加入「儿童上网保护」的设备。",
+        "由路由器儿童上网管控标记圈定；这些设备在线时也会出现在「在线设备」页签里。");
     }).catch(function (e) { showOut("设备列表", "请求失败：" + e); })
       .then(function () { btn.disabled = false; });
   }

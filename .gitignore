@@ -27,3 +27,6 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# ── 本地实验区：探测脚本、快照、演示页、测试输出，不进版本库 ──
+.backup/

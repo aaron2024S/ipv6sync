@@ -5,7 +5,7 @@
 #
 # 部署（全程不用 .env）：
 #   1) 导入镜像
-#        docker load -i ipv6sync-1.0.6-amd64-image.tar     # x86_64 NAS / PC（唯一产物）
+#        docker load -i ipv6sync-1.0.7-amd64-image.tar     # x86_64 NAS / PC（唯一产物）
 #   2) 改下面 environment 里的 ADMIN_USERNAME / ADMIN_PASSWORD（控制台登录账号）
 #   3) mkdir -p data && sudo chown 10001:10001 data        # 见下方「挂载目录属主」
 #   4) docker compose -f docker-compose.offline.yml up -d

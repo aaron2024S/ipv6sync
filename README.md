@@ -290,7 +290,7 @@ RULES=[{"name":"NAS","port":16669,"mac":"00:11:22:AA:BB:CC"},
 
 ```
 ipv6sync/offline/dist/
-├── ipv6sync-1.0.6-amd64-image.tar     51.4 MB   x86_64 NAS（唯一产物）
+├── ipv6sync-1.0.7-amd64-image.tar     51.4 MB   x86_64 NAS（唯一产物）
 ├── docker-compose.offline.yml          无 build 段的 compose
 ├── .env.example                        环境变量模板
 ├── SHA256SUMS.txt                      tar 的 sha256
@@ -301,7 +301,7 @@ NAS 上只需要四步：
 
 ```bash
 uname -m                                    # 应该是 x86_64
-docker load -i ipv6sync-1.0.6-amd64-image.tar
+docker load -i ipv6sync-1.0.7-amd64-image.tar
 mkdir -p data && sudo chown -R 10001:10001 data
 docker compose -f docker-compose.offline.yml up -d   # 先在 yaml 的 environment 里改 ADMIN_PASSWORD
 ```
@@ -443,13 +443,29 @@ python -m unittest discover -s tests -t . -v
 
 ## 变更记录
 
+### 1.0.7
+- **控制台「在线设备」升级为「设备列表」四页签**：在线设备 / 离线设备 / 黑名单 /
+  儿童上网，各带台数徽标，一次刷新同时取齐。
+  - **离线设备**：按 `Active` 拆分单独展示（不再和在线混在一张表里），
+    附「最后在线」时间，整表淡化显示。
+  - **黑名单**：新增读取 WiFi MAC 过滤黑名单（`ntwk/wlanfilterenhance`），
+    2.4G/5G 合并去重、带主机名，只读展示；该接口失败不影响设备列表本身。
+  - **儿童上网**：由路由器 HostInfo 的儿童上网管控标记
+    （`ParentControlEnable` / `MacFilterID`）**动态圈定**，在路由器上加入/移出
+    儿童上网保护后刷新即跟随变化；页内同时标注每台的在线状态。
+- `Active` 字段改用统一真值判定：固件可能用字符串 `"0"` 表示关机，
+  直接 `bool()` 会误判为在线。
+- 修正变更记录：原「去掉所有取址开关」一节版本号应为 1.0.5（上版误标 1.0.6）。
+- 单测 **143 项**（新增在线/离线/儿童判定、黑名单跨频段合并、黑名单接口失败降级、
+  异形响应容错等 5 个用例）。
+
 ### 1.0.6
 - **手机端「在线设备」表格修复**：设备表与白名单表外层加横向滚动容器
   （`overflow-x:auto`），单元格 `white-space:nowrap` 不再换行 —— 之前 IPv6 地址
   会折成十几行并溢出卡片边界。窄屏下表格在卡片内横向滑动（约 550~620px），
   页面本身不再出现横向溢出。
 - 单测 139 项全部通过，另用无头 Chromium 实测 360px / 320px 视口前后对照确认修复。
-### 1.0.6
+### 1.0.5
 - **去掉所有取址开关**：删掉 `SOURCE` / `MISMATCH_POLICY` / `WRITE_ALL` / `MAX_ADDRS`
   / `ADDR_SUFFIX` / `IFACE` / `TARGET_HOSTNAME` / `ALLOW_ULA` 八个配置项 —— 网页上不再
   出现，`.env` 里写了也不生效。流程固定成一条直线：**读本机网卡 → 和白名单比 →
