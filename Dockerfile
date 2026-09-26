@@ -3,7 +3,7 @@ FROM python:3.12-alpine
 
 LABEL org.opencontainers.image.title="huawei-ipv6-trustlist-sync" \
       org.opencontainers.image.description="发现 NAS 自身 IPv6 变化并同步到华为路由器 IPv6 防火墙白名单" \
-      org.opencontainers.image.version="1.0.5"
+      org.opencontainers.image.version="1.0.6"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

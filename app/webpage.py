@@ -122,10 +122,12 @@ pre.out{background:var(--bg);border:1px solid var(--line);border-radius:8px;
   padding:12px;font-size:12px;line-height:1.55;max-height:300px;overflow:auto;
   white-space:pre-wrap;word-break:break-all;margin:0;font-family:ui-monospace,
   SFMono-Regular,Menlo,Consolas,monospace}
-table{width:100%;border-collapse:collapse;font-size:12.5px}
+/* 表格套一层横向滚动容器：手机上窄屏放不下时整体横滑，不换行、不撑出卡片 */
+.tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;font-size:12.5px;min-width:100%}
 th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);
-  vertical-align:top;word-break:break-all}
-th{color:var(--muted);font-weight:500;white-space:nowrap}
+  vertical-align:top;white-space:nowrap}
+th{color:var(--muted);font-weight:500}
 tr:last-child td{border-bottom:none}
 .foot{position:fixed;left:0;right:0;bottom:0;background:var(--card);
   border-top:1px solid var(--line);padding:12px 18px;display:flex;gap:10px;
@@ -771,7 +773,11 @@ tr:last-child td{border-bottom:none}
           });
         t.appendChild(tr);
       });
-      box.appendChild(t);
+      // 套横向滚动容器：手机窄屏上表格整体横滑，不换行、不撑出卡片
+      var sc = document.createElement("div");
+      sc.className = "tblwrap";
+      sc.appendChild(t);
+      box.appendChild(sc);
       document.getElementById("hostsDesc").textContent = "共 " + j.hosts.length +
         " 台设备；当前 LAN 前缀：" + ((j.lan_prefixes || []).join(", ") || "（无）");
     }).catch(function (e) { showOut("设备列表", "请求失败：" + e); })
@@ -825,7 +831,10 @@ tr:last-child td{border-bottom:none}
         });
         t.appendChild(tr);
       });
-      box.appendChild(t);
+      var sc = document.createElement("div");
+      sc.className = "tblwrap";
+      sc.appendChild(t);
+      box.appendChild(sc);
       var bar = document.createElement("div");
       bar.className = "toolbar";
       bar.style.marginTop = "12px";

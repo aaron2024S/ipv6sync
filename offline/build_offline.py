@@ -42,7 +42,7 @@ IMAGE_NAME = "ipv6sync"
 IMAGE_TAG = "latest"
 
 
-def _read_version(fallback: str = "1.0.5") -> str:
+def _read_version(fallback: str = "1.0.6") -> str:
     """版本号的唯一来源是 app/__init__.py。
 
     以前这里和两个 validate_*.py 各硬编码一份，发版时要改 4 处、极易漏改，

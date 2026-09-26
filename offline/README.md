@@ -14,7 +14,7 @@
 
 | 文件 | 大小 | 说明 |
 |---|---|---|
-| `ipv6sync-1.0.5-amd64-image.tar` | 51.4 MB | x86_64 NAS / PC —— **唯一产物** |
+| `ipv6sync-1.0.6-amd64-image.tar` | 51.4 MB | x86_64 NAS / PC —— **唯一产物** |
 | `docker-compose.offline.yml` | — | 无 `build` 段的 compose，`image:` 直接引用本地镜像 |
 | `.env.example` | — | 进阶用环境变量模板（可选；常规部署不需要 `.env`） |
 | `SHA256SUMS.txt` | — | tar 的 sha256 |
@@ -55,7 +55,7 @@ sha256sum -c SHA256SUMS.txt
 ### 3. 导入镜像
 
 ```bash
-docker load -i ipv6sync-1.0.5-amd64-image.tar
+docker load -i ipv6sync-1.0.6-amd64-image.tar
 ```
 
 成功后会有 `Loaded image: ipv6sync:latest`。核对一下：
