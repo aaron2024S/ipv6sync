@@ -356,7 +356,7 @@ tr.offrow td{opacity:.62}
   </div><!-- /tab-about -->
 </div>
 
-<div class="foot" id="foot">
+<div class="foot hide" id="foot">
   <span class="hint" id="hint"></span>
   <button id="btnReset">放弃修改</button>
   <button id="btnSave" class="primary">保存并应用</button>
@@ -685,10 +685,18 @@ tr.offrow td{opacity:.62}
     return patch;
   }
 
+  var curTab = "main";
+  var dirtyCount = 0;   // 未保存改动数：>0 且在设置/通知页才显示保存栏
+  function syncFoot() {
+    document.getElementById("foot").classList.toggle("hide",
+      !((curTab === "main" || curTab === "notify") && dirtyCount > 0));
+  }
   function markDirty() {
     var n = Object.keys(collect()).length;
+    dirtyCount = n;
     els.hint.textContent = n ? ("有 " + n + " 项改动未保存") : "没有未保存的改动";
     document.getElementById("btnSave").disabled = !n;
+    syncFoot();
   }
 
   function renderPills(overview, st) {
@@ -879,7 +887,6 @@ tr.offrow td{opacity:.62}
     state.user = user || "admin";
     els.login.classList.add("hide");
     els.app.classList.remove("hide");
-    document.getElementById("foot").classList.remove("hide");
     load(false).then(function () {
       toast("已登录", "ok");
       loadWL();               // 白名单是主页的核心卡片，进来就拉一次
@@ -923,9 +930,9 @@ tr.offrow td{opacity:.62}
       document.getElementById("tab-" + t).classList.toggle("hide", t !== name);
       document.getElementById("tabbtn-" + t).classList.toggle("active", t === name);
     });
-    // 保存栏属于「同步与设置」和「通知设置」两页
-    document.getElementById("foot").classList.toggle("hide",
-      name !== "main" && name !== "notify");
+    // 保存栏属于「同步与设置」和「通知设置」两页，且仅在有改动时显示
+    curTab = name;
+    syncFoot();
     if (name === "devices" && !hostsLoaded) { loadHosts(); }   // 首次打开自动拉一次
   }
   document.getElementById("tabbtn-main").addEventListener("click", function () { switchTab("main"); });
