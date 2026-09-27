@@ -40,6 +40,9 @@ curl -s localhost:8099/state | python -m json.tool   # 运行状态
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8099/healthz   # 200 = 正常
 ```
 
+这两条 curl **只能在 NAS 本机上跑**：健康检查端口只绑 `127.0.0.1`（见下方「配置项」，
+也见「安全说明」），局域网里别的机器连不上 —— 它是个内部排障接口，没有鉴权。
+
 ---
 
 ## 浏览器控制台（可选）
@@ -97,6 +100,11 @@ PREVIEW_PORT=9000 PREVIEW_PASSWORD=xxx python preview_console.py
 ### 安全说明（这一块请认真看）
 
 - 页面能改路由器密码，等于**一部分路由器管理权**。不要做端口映射到公网，别用弱口令。
+- **健康检查端口（`HEALTH_PORT`，默认 8099）只绑 `127.0.0.1`**：它给 Docker
+  `HEALTHCHECK` 和宿主机本地 `curl` 排障用，**没有任何鉴权**。程序要求 `host`
+  网络部署，这里若绑 `0.0.0.0`，就等于在 NAS 的每张网卡上凭空多开一个对局域网
+  开放的接口（`/state` 里能看到路由器地址、各条目地址等信息）。确需别的机器读
+  `/healthz` 才设 `HEALTH_HOST=0.0.0.0`。
 - 登录防爆破，三层：单 IP 5 分钟内错 8 次 → 锁定，**反复触发锁定逐次翻倍**
   （5 分钟 → 10 分钟 → …，上限 6 小时）；所有来源合计 5 分钟内错 60 次 →
   全局熔断一个窗口（防换 IP 分摊）；每次登录校验前恒定延时 0.25 秒。
@@ -250,7 +258,8 @@ SLAAC 稳定地址、RFC 4941 隐私临时地址、DHCPv6 分配地址，前缀�
 | `DRY_RUN` | `false` | 只打印不写路由器 |
 | `ONCE` | `false` | 跑一轮就退出 |
 | `LOGIN_BACKOFF_BASE` / `MAX` | `300` / `21600` | 密码错后的退避起点/上限（秒） |
-| `HEALTH_PORT` | `8099` | 健康检查端口（`0` 关闭） |
+| `HEALTH_PORT` | `8099` | 健康检查/状态端口（`0` 关闭）；**只绑 `127.0.0.1`**，不对外 |
+| `HEALTH_HOST` | `127.0.0.1` | 健康检查监听地址；改成 `0.0.0.0` 才会对局域网开放 |
 | `LOG_LEVEL` / `LOG_JSON` | `INFO` / `false` | 日志级别 / JSON 日志 |
 | `SESSION_FILE` | `/data/session.json` | 会话缓存（**只存 Cookie 和 CSRF 令牌，不含密码**） |
 | `ADMIN_USERNAME` | `admin` | 控制台登录用户名（compose 的 environment） |
@@ -260,7 +269,11 @@ SLAAC 稳定地址、RFC 4941 隐私临时地址、DHCPv6 分配地址，前缀�
 | `WEB_SESSION_TTL` | `43200` | 控制台登录有效期（秒） |
 | `SETTINGS_FILE` | `/data/settings.json` | 网页保存的设置（优先级高于环境变量） |
 
-上表中除 `LOGIN_BACKOFF_*`、`SESSION_FILE`、`RULES*` 之外的字段都能在**控制台页面**上直接改。
+上表里**控制台页面能改的**只有：`ROUTER_*`、`POLL_INTERVAL`、行为开关（`ENSURE_FIREWALL_ON`
+/ `VERIFY_AFTER_WRITE` / `DRY_RUN`）、`LOG_LEVEL` / `LOG_MAX`、以及通知设置（`NOTIFY_*` /
+`NTFY_*` / `GOTIFY_*` / `WECOM_*`）。其余（`HEALTH_*`、`ADMIN_*`、`PORT` / `WEB_HOST`、
+`WEB_SESSION_TTL`、`*_FILE`、`STATE_FILE`、`LOGIN_BACKOFF_*`）只能用环境变量 ——
+它们决定"服务怎么起、往哪写"，改了没法热生效。
 
 ### 一台路由器管多台设备
 

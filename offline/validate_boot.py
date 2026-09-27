@@ -69,6 +69,7 @@ EXPECT_ENV = {
     "SESSION_FILE": "/data/session.json",
     "SETTINGS_FILE": "/data/settings.json",
     "HEALTH_PORT": "8099",
+    "HEALTH_HOST": "127.0.0.1",
     "PORT": "6600",
 }
 
@@ -160,6 +161,10 @@ def t9_web_console(root, wd, stub, want_port: int):
     import urllib.error
     import urllib.request
 
+    # 本机系统代理（Windows 注册表 / HTTP_PROXY）会把发往 127.0.0.1 的请求也
+    # 劫持走，而这里要访问的控制台就在回环上 —— 不绕开代理只会拿到 502 假失败。
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
     web_port = free_port()
     health_port = free_port()
     pw = "console-pw-" + str(web_port)
@@ -193,7 +198,7 @@ def t9_web_console(root, wd, stub, want_port: int):
             if proc.poll() is not None:
                 break
             try:
-                with urllib.request.urlopen(base + "/api/session", timeout=3) as r:
+                with opener.open(base + "/api/session", timeout=3) as r:
                     if r.status == 200:
                         up = True
                         break
@@ -211,7 +216,7 @@ def t9_web_console(root, wd, stub, want_port: int):
             rq = urllib.request.Request(base + path, data=data, headers=hdr,
                                         method=method)
             try:
-                with urllib.request.urlopen(rq, timeout=15) as r:
+                with opener.open(rq, timeout=15) as r:
                     return r.status, r.read().decode("utf-8"), r.headers
             except urllib.error.HTTPError as e:
                 try:
@@ -220,7 +225,7 @@ def t9_web_console(root, wd, stub, want_port: int):
                     e.close()
 
         # 页面
-        with urllib.request.urlopen(base + "/", timeout=10) as r:
+        with opener.open(base + "/", timeout=10) as r:
             page = r.read().decode("utf-8", "replace")
         if 'type="password"' not in page or "__APP_VERSION__" in page:
             fail("T9 控制台页面异常（缺登录表单或版本未注入）")
@@ -462,6 +467,12 @@ def validate(arch):
                 fail("T7 healthcheck 的 -c 参数里含双引号，shell 下会被截断")
             else:
                 ok("T7 healthcheck 的 -c 参数无双引号，可安全穿过 shell")
+            # Docker 若被配了代理会把 HTTP_PROXY 注入容器，urllib 连 127.0.0.1
+            # 也会走代理，健康检查就永远失败 —— 命令里必须显式清掉代理
+            if "no_proxy" not in body:
+                fail("T7 healthcheck 没有设 no_proxy —— 容器有 HTTP_PROXY 时会假 unhealthy")
+            else:
+                ok("T7 healthcheck 显式绕开代理（no_proxy=*）")
             # 对 200 端点应成功
             srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), StubHealth)
             port = srv.server_address[1]

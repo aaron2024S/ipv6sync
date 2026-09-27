@@ -14,7 +14,8 @@
   8. config.User 能在镜像自己的 /etc/passwd 里查到，且 uid 一致
   9. 工作目录里 CMD/ENTRYPOINT 的相对路径可解析
  10. 层内的 .py 是无 BOM 的 UTF-8、纯 LF
- 11. healthcheck 依赖的 /healthz 在应用代码里真的实现了
+ 11. healthcheck 依赖的 /healthz 在应用代码里真的实现了，且健康检查默认只绑回环
+     （ExposedPorts 里也不得出现 8099/tcp —— 它是内部接口，不该对外声明）
 
 用法：
   python validate_image.py --arch amd64
@@ -354,18 +355,24 @@ def validate(arch):
         else:
             ok("config.Volumes 含 /data")
         ep = cfg["config"].get("ExposedPorts") or {}
-        for p in ("8099/tcp", "6600/tcp"):
-            if p not in ep:
-                fail(f"config.ExposedPorts 里缺 {p}")
-            else:
-                ok(f"config.ExposedPorts 含 {p}")
+        if "6600/tcp" not in ep:
+            fail("config.ExposedPorts 里缺 6600/tcp（控制台端口）")
+        else:
+            ok("config.ExposedPorts 含 6600/tcp")
+        # 健康检查只绑 127.0.0.1，是内部接口。一旦声明进 ExposedPorts，NAS 面板
+        # 就会把它列成"可发布端口"，等于把没有鉴权的 /state 对外推荐出去。
+        if "8099/tcp" in ep:
+            fail("config.ExposedPorts 里出现了 8099/tcp —— 健康检查只绑回环，不该对外声明")
+        else:
+            ok("config.ExposedPorts 不含 8099/tcp（健康检查仅回环）")
         # 手工拼 config 时最容易漏的就是这些默认环境变量（镜像层是复用的，
         # config 是自己写的），所以按 Dockerfile 逐条核对
         envs = {e.split("=", 1)[0]: e.split("=", 1)[1]
                 for e in (cfg["config"].get("Env") or []) if "=" in e}
         for k, want in (("SESSION_FILE", "/data/session.json"),
                         ("SETTINGS_FILE", "/data/settings.json"),
-                        ("HEALTH_PORT", "8099"), ("PORT", "6600")):
+                        ("HEALTH_PORT", "8099"),
+                        ("HEALTH_HOST", "127.0.0.1"), ("PORT", "6600")):
             if envs.get(k) != want:
                 fail(f"config.Env[{k}] = {envs.get(k)!r}，期望 {want!r}")
         ok("config.Env 里的路径与端口默认值正确")
@@ -395,6 +402,15 @@ def validate(arch):
             fail(f"{appdir}/main.py 里没有 /healthz（HEALTHCHECK 会永远失败）")
         else:
             ok("main.py 里实现了 /healthz")
+
+        # 健康检查必须默认绑回环：程序要求 host 网络，绑 0.0.0.0 会在 NAS 的
+        # 每张网卡上凭空多开一个没有鉴权的 HTTP 服务（/state 会泄露路由器地址等）
+        cfg_py = (view.data(f"{appdir}/config.py") or b"").decode("utf-8", "replace")
+        host_lines = [ln for ln in cfg_py.splitlines() if "health_host" in ln]
+        if not any("127.0.0.1" in ln for ln in host_lines):
+            fail("config.py 里 health_host 的默认值不是 127.0.0.1 —— 健康检查会对外暴露")
+        else:
+            ok("config.py 的 health_host 默认 127.0.0.1（健康检查只绑回环）")
 
     # --- 产物哈希清单
     sums = os.path.join(DIST_DIR, "SHA256SUMS.txt")

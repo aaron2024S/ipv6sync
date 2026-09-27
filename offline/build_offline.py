@@ -14,7 +14,7 @@
     RUN chown -R syncapp:syncapp   -> /app 树的 uid/gid 直接写成 10001
     USER syncapp                   -> config.User
     VOLUME ["/data"]               -> config.Volumes
-    EXPOSE 8099 6600               -> config.ExposedPorts
+    EXPOSE 6600                    -> config.ExposedPorts
     LABEL ...                      -> config.Labels
     HEALTHCHECK ...                -> config.Healthcheck
     ENTRYPOINT [...]               -> config.Entrypoint，并清空基础镜像的 Cmd
@@ -79,6 +79,7 @@ APP_ENV = [
     ("SESSION_FILE", "/data/session.json"),
     ("SETTINGS_FILE", "/data/settings.json"),
     ("HEALTH_PORT", "8099"),
+    ("HEALTH_HOST", "127.0.0.1"),
     ("PORT", "6600"),
 ]
 
@@ -92,6 +93,9 @@ APP_LABELS = {
 # HEALTHCHECK 的 shell 形式命令行（Dockerfile 里 `\` 续行，解析后拼成一行）
 HEALTH_CMD = (
     'python -c "import os,sys,urllib.request; '
+    # no_proxy=*：Docker 若被配了代理（NAS 上很常见），会把 HTTP_PROXY 注入容器，
+    # urllib 连 127.0.0.1 也会绕到代理去，健康检查就永远失败
+    "os.environ['no_proxy']='*'; "
     "p=os.environ.get('HEALTH_PORT','8099'); "
     "sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+p+'/healthz', "
     'timeout=4).status==200 else 1)"'
@@ -106,6 +110,18 @@ def sha256_file(p):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def read_lf(p):
+    """读文件并把行尾归一化成 LF。
+
+    打包器产出的字节**不该取决于在哪个系统上打包**：Windows 上（core.autocrlf=true）
+    checkout 出来的工作区是 CRLF，若原样打进镜像，就会和 Linux 上 `docker build`
+    的产物不一致 —— Python 跑 CRLF 虽然没问题，但镜像校验（validate_image.py 第 10
+    项）会因为「.py 含 CRLF」直接判失败，白白浪费一次构建。
+    """
+    with open(p, "rb") as f:
+        return f.read().replace(b"\r\n", b"\n")
 
 
 def norm(name):
@@ -249,8 +265,9 @@ def build_app_layer(cache, meta, out_path, fixed_mtime):
         lb.emit("app", "dir", 0o755, APP_UID, APP_GID)
         lb.emit("app/app", "dir", 0o755, APP_UID, APP_GID)
         for fn in py_files:
-            with open(os.path.join(src_app, fn), "rb") as f:
-                lb.emit_blob(f"app/app/{fn}", f.read(), 0o644, APP_UID, APP_GID)
+            lb.emit_blob(f"app/app/{fn}",
+                         read_lf(os.path.join(src_app, fn)),
+                         0o644, APP_UID, APP_GID)
 
         # /data：VOLUME 挂载点，属主必须是运行用户，否则非 root 进程写不了会话文件
         lb.emit("data", "dir", 0o755, APP_UID, APP_GID)
@@ -296,7 +313,9 @@ def make_config(base_cfg, arch, diff_ids, created):
         env = [e for e in env if not e.startswith(k + "=")] + [f"{k}={v}"]
     c["Env"] = env
 
-    c["ExposedPorts"] = {"8099/tcp": {}, "6600/tcp": {}}
+    # 只声明控制台端口：健康检查（8099）只绑 127.0.0.1，是内部接口，
+    # 声明成 ExposedPorts 会让 NAS 面板以为它能对外发布。
+    c["ExposedPorts"] = {"6600/tcp": {}}
     c["Volumes"] = {"/data": {}}
     labels = dict(c.get("Labels") or {})
     labels.update(APP_LABELS)

@@ -54,7 +54,15 @@ def setup_logging(level: str, as_json: bool = False):
 # 健康检查 / 状态接口
 # --------------------------------------------------------------------------
 
-def start_health_server(node, port: int) -> ThreadingHTTPServer | None:
+def start_health_server(node, port: int,
+                        host: str = "127.0.0.1") -> ThreadingHTTPServer | None:
+    """健康检查 / 状态接口（`/healthz` `/state`）。
+
+    **默认只绑回环**：这里一个鉴权都没有，唯一的消费者是容器自己的 HEALTHCHECK
+    和宿主机本地排障用的 curl。程序要求 host 网络部署，绑 0.0.0.0 就等于把
+    NAS 每张网卡上都开一个对局域网开放的 HTTP 服务（`/state` 里有路由器地址、
+    条目地址等信息），纯属白送的攻击面。确需远端读取才显式传 host。
+    """
     if port <= 0:
         return None
 
@@ -98,13 +106,16 @@ def start_health_server(node, port: int) -> ThreadingHTTPServer | None:
                 self._send(404, {"error": "not found"})
 
     try:
-        srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        srv = ThreadingHTTPServer((host, port), Handler)
     except OSError as e:
-        log.error("健康检查端口 %d 绑定失败：%s", port, e)
+        log.error("健康检查端口 %s:%d 绑定失败：%s", host, port, e)
         return None
     t = threading.Thread(target=srv.serve_forever, name="health", daemon=True)
     t.start()
-    log.info("健康检查已监听 :%d  ——  /healthz  /state", port)
+    scope = ("仅本机可访问" if host in ("127.0.0.1", "::1", "localhost")
+             else "对外可访问，请确认这是你要的")
+    log.info("健康检查已监听 %s:%d（%s）  ——  /healthz  /state",
+             host, port, scope)
     return srv
 
 
@@ -198,7 +209,7 @@ def main(argv=None):
     srv = None
     webui = None
     if not cfg.once:
-        srv = start_health_server(node, cfg.health_port)
+        srv = start_health_server(node, cfg.health_port, cfg.health_host)
         webui = webui_from_env(node)
         webui.start()
         if not webui.enabled():

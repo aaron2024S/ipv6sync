@@ -131,7 +131,12 @@ class Config:
     notify_wecom_id: str = ""           # 企业微信机器人 ID（webhook key= 后那串）
 
     # --- 观测 ---
+    # 健康检查只服务两个内部消费者：容器自带的 Docker HEALTHCHECK，以及宿主机上
+    # 手动 `curl 127.0.0.1:8099/state` 排障。默认绑回环 —— 程序硬要求 host 网络
+    # 部署，若绑 0.0.0.0 就等于在 NAS 的**每张网卡**上凭空多开一个面向局域网的
+    # HTTP 服务（既没必要，也没鉴权）。确需别的机器读 /healthz 才改 HEALTH_HOST。
     health_port: int = 8099
+    health_host: str = "127.0.0.1"
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -249,6 +254,7 @@ def load_config(argv: list[str] | None = None) -> Config:
         notify_wecom_enabled=_env_bool("NOTIFY_WECOM_ENABLED", False),
         notify_wecom_id=_env("NOTIFY_WECOM_ID", ""),
         health_port=_env_int("HEALTH_PORT", 8099),
+        health_host=_env("HEALTH_HOST", "127.0.0.1"),
         log_level=(_env("LOG_LEVEL", "INFO") or "INFO").upper(),
         log_json=_env_bool("LOG_JSON", False),
         web_host=_env("WEB_HOST", "0.0.0.0"),
@@ -337,7 +343,11 @@ HELP = """\
   POLL_INTERVAL          轮询秒数，默认 60
   ENSURE_FIREWALL_ON     是否自动打开 IPv6 防火墙开关，默认 false
   DRY_RUN                只打印不写入
-  HEALTH_PORT            健康检查端口，默认 8099
+  HEALTH_PORT            健康检查端口，默认 8099；0 = 关闭
+  HEALTH_HOST            健康检查监听地址，默认 127.0.0.1（**只允许本机访问**）
+                         只给 Docker HEALTHCHECK 和宿主机本地排障用。host 网络下
+                         绑 0.0.0.0 等于在 NAS 每张网卡上多开一个对外服务，
+                         所以默认只绑回环；确需别的机器读 /healthz 再改
 
 通知（防火墙白名单变更后推送；也可只在网页控制台里配。三个渠道互相独立，
 启用几个就同时推几个）:

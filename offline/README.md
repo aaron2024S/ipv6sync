@@ -146,6 +146,9 @@ curl -s http://127.0.0.1:8099/healthz | jq
 `status: ok` 且 `consecutive_failures: 0` 就说明最近一轮同步成功了。
 （`Dockerfile` 里的 `HEALTHCHECK` 用的就是这个端点，`docker ps` 会显示 `healthy`。）
 
+这个端口**只绑 `127.0.0.1`**，所以只能在 NAS 本机（`ssh` 上去）这样查；
+局域网里别的机器连不上，也不需要连 —— 它是个内部排障接口，没有鉴权。
+
 ---
 
 ## 三、镜像内容与 Dockerfile 的字段对应
@@ -156,7 +159,7 @@ curl -s http://127.0.0.1:8099/healthz | jq
 |---|---|
 | `FROM python:3.12-alpine` | 复用 offline 拉取并双重校验过的 4 个基础层 |
 | `LABEL org.opencontainers.image.*` | `config.Labels` |
-| `ENV PYTHONUNBUFFERED=1` … 共 10 项 | `config.Env`（与基础镜像环境合并，同名覆盖，无重复键） |
+| `ENV PYTHONUNBUFFERED=1` … 共 11 项 | `config.Env`（与基础镜像环境合并，同名覆盖，无重复键） |
 | `WORKDIR /app` | `config.WorkingDir` = `/app` |
 | `RUN addgroup -g 10001 -S syncapp` | 改写 `/etc/group` 追加 `syncapp:x:10001:` |
 | `RUN adduser -u 10001 -S -G syncapp -H` | 改写 `/etc/passwd`、`/etc/shadow` 追加 uid/gid 10001 |
@@ -165,8 +168,8 @@ curl -s http://127.0.0.1:8099/healthz | jq
 | `RUN chown -R syncapp:syncapp /app` | `/app` 与 `/app/app` 的 uid/gid 直接写成 10001 |
 | `USER syncapp` | `config.User` = `syncapp` |
 | `VOLUME ["/data"]` | `config.Volumes` = `{"/data": {}}` |
-| `EXPOSE 8099 6600` | `config.ExposedPorts` = `{"8099/tcp": {}, "6600/tcp": {}}` |
-| `HEALTHCHECK --interval=60s …` | `config.Healthcheck`（interval 60s / timeout 6s / start-period 25s / retries 3） |
+| `EXPOSE 6600` | `config.ExposedPorts` = `{"6600/tcp": {}}`（健康检查只绑 `127.0.0.1`，是内部接口，不声明为可发布端口） |
+| `HEALTHCHECK --interval=60s …` | `config.Healthcheck`（interval 60s / timeout 6s / start-period 25s / retries 3）；命令里先设 `no_proxy=*`，避免 Docker 注入的 `HTTP_PROXY` 把回环请求劫持走 |
 | `ENTRYPOINT ["python","-u","-m","app.main"]` | `config.Entrypoint`；同时把 `config.Cmd` 置空（只设 ENTRYPOINT 时 `docker build` 会清掉基础镜像的 CMD，这里保持一致） |
 
 > 手工拼 config 时最容易漏的就是 `ENV` 这类"不体现在层里"的东西 ——
@@ -216,10 +219,13 @@ curl -s http://127.0.0.1:8099/healthz | jq
 - **控制台页面里有登录表单**（`type="password"` 与 `/api/login`）——
   如果哪天改坏了登录逻辑，这里会拦住
 - **`config.Env` 里的路径/端口默认值逐条核对**（`SESSION_FILE`/`SETTINGS_FILE`/
-  `HEALTH_PORT`/`PORT`），并确认**镜像里没有烘进任何密码**
-- `config.ExposedPorts` 同时含 `8099/tcp` 与 `6600/tcp`
+  `HEALTH_PORT`/`HEALTH_HOST`/`PORT`），并确认**镜像里没有烘进任何密码**
+- `config.ExposedPorts` **只含 `6600/tcp`**；出现 `8099/tcp` 直接判失败 ——
+  健康检查只绑回环，声明出去会让 NAS 面板把它当成可发布端口
 - 层内 `.py` 无 BOM、纯 LF
-- `main.py` 里确实实现了 `/healthz`（否则 HEALTHCHECK 永远失败）
+- `main.py` 里确实实现了 `/healthz`（否则 HEALTHCHECK 永远失败），且
+  `config.py` 的 `health_host` 默认值是 `127.0.0.1`（绑 `0.0.0.0` 等于白白
+  把没有鉴权的 `/state` 暴露给整个局域网）
 
 ### 行为校验 `validate_boot.py`（真跑）
 

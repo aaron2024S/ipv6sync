@@ -14,6 +14,7 @@ ENV PYTHONUNBUFFERED=1 \
     SESSION_FILE=/data/session.json \
     SETTINGS_FILE=/data/settings.json \
     HEALTH_PORT=8099 \
+    HEALTH_HOST=127.0.0.1 \
     PORT=6600
 
 WORKDIR /app
@@ -30,12 +31,17 @@ RUN chown -R syncapp:syncapp /app
 USER syncapp
 
 VOLUME ["/data"]
-# 8099 = 健康检查/状态；6600 = 浏览器控制台（未设 ADMIN_PASSWORD 时不监听）
-EXPOSE 8099 6600
+# 6600 = 浏览器控制台（未设 ADMIN_PASSWORD 时不监听）。
+# 健康检查/状态（8099）只绑 127.0.0.1（见 HEALTH_HOST），只有容器自己和宿主机
+# 本机能访问 —— 不是对外服务，所以**不 EXPOSE**，免得 NAS 面板把它当成可发布端口。
+EXPOSE 6600
 
 # 健康检查：/healthz 会在「最近一轮同步成功」时返回 200
+# 先设 no_proxy=*：NAS 上的 Docker 若配了代理，会以 HTTP_PROXY 注入容器，那样
+# urllib 连 127.0.0.1 都会绕到代理去 —— 健康检查会永远失败（假 unhealthy）。
 HEALTHCHECK --interval=60s --timeout=6s --start-period=25s --retries=3 \
   CMD python -c "import os,sys,urllib.request; \
+os.environ['no_proxy']='*'; \
 p=os.environ.get('HEALTH_PORT','8099'); \
 sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+p+'/healthz', timeout=4).status==200 else 1)"
 

@@ -39,11 +39,12 @@ services:
       # 会话缓存 + 网页保存的设置（settings.json 里会有明文路由器密码，网页里填过就有）
       - ./data:/data
 
-    # network_mode: host 时端口直接开在宿主机上，无需 ports 映射；
-    # 若改用 bridge，请把下面两行取消注释。
+    # network_mode: host 时端口直接开在宿主机上，无需 ports 映射。
+    # 健康检查端口（8099）只绑 127.0.0.1 —— 它本来就不对外，也不要映射它；
+    # 宿主机上排障直接 `curl 127.0.0.1:8099/state`。
+    # 若改用 bridge，把下面这行取消注释：
     # ports:
     #   - "6600:6600"              # 浏览器控制台
-    #   - "127.0.0.1:8099:8099"    # 健康检查只在宿主机本地
 
     logging:
       driver: json-file

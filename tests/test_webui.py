@@ -30,7 +30,8 @@ ENV_KEYS = ("ROUTER_HOST", "ROUTER_USER", "ROUTER_PASSWORD", "ROUTER_PASSWORD_FI
             "SETTINGS_FILE", "STATE_FILE", "SESSION_FILE", "TARGET_MAC",
             "POLL_INTERVAL",
             "ENTRY_NAME", "PORT", "DRY_RUN", "VERIFY_AFTER_WRITE",
-            "ADMIN_USERNAME", "ADMIN_PASSWORD", "ADMIN_PASSWORD_FILE")
+            "ADMIN_USERNAME", "ADMIN_PASSWORD", "ADMIN_PASSWORD_FILE",
+            "HEALTH_PORT", "HEALTH_HOST")
 
 
 def free_port() -> int:
@@ -39,6 +40,14 @@ def free_port() -> int:
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+# 测试里的服务全在回环上，而 urllib **默认会读系统代理**（Windows 注册表、
+# 或 HTTP_PROXY 环境变量）。机器上只要配了代理（例如 NAS 环境里常见的
+# http://192.168.3.62:7890），发往 127.0.0.1 的请求也会被丢给代理，代理再回
+# 一个 502 —— 于是一片 HTTP 用例全部"假失败"，报错还看不出跟代理有关。
+# 这里显式挂一个空 ProxyHandler，彻底绕开代理。
+NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class EnvSandbox(unittest.TestCase):
@@ -409,7 +418,7 @@ def call(base, path, method="GET", body=None, cookie=None, origin=None,
     req = urllib.request.Request(base + path, data=data, headers=headers,
                                  method=method)
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with NO_PROXY_OPENER.open(req, timeout=10) as r:
             payload = r.read().decode("utf-8")
             return r.status, (payload if raw else json.loads(payload)), r.headers
     except urllib.error.HTTPError as e:
@@ -519,6 +528,53 @@ class ConsoleCredentialsTest(EnvSandbox):
     def test_no_admin_password_disables_console(self):
         ui = webui_from_env(FakeNode(), host="127.0.0.1", port=free_port())
         self.assertFalse(ui.enabled())
+
+
+class HealthServerScopeTest(EnvSandbox):
+    """健康检查/状态接口必须**只绑回环**。
+
+    它没有任何鉴权，而 /state 里能看到路由器地址、条目地址等信息。程序硬要求
+    host 网络部署，一旦绑 0.0.0.0，就等于在 NAS 的每张网卡上凭空多开一个对
+    局域网开放的 HTTP 服务 —— 这正是"莫名多出来一个 8099 端口"的根源。
+    """
+
+    def _start(self, host=None):
+        from app.main import start_health_server
+        port = free_port()
+        srv = (start_health_server(FakeNode(), port, host) if host is not None
+               else start_health_server(FakeNode(), port))
+        self.assertIsNotNone(srv, "健康检查服务没起来")
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return srv
+
+    def test_default_binds_loopback_only(self):
+        srv = self._start()
+        self.assertEqual(srv.server_address[0], "127.0.0.1",
+                         "健康检查默认必须绑 127.0.0.1，不能是 0.0.0.0")
+
+    def test_config_default_host_is_loopback(self):
+        os.environ.pop("HEALTH_HOST", None)
+        self.assertEqual(load_config([]).health_host, "127.0.0.1")
+        # 但确实可以显式放开（确需别的机器读 /healthz 的场景）
+        os.environ["HEALTH_HOST"] = "0.0.0.0"
+        self.assertEqual(load_config([]).health_host, "0.0.0.0")
+
+    def test_healthz_served_on_bound_address(self):
+        srv = self._start()
+        host, port = srv.server_address[0], srv.server_address[1]
+        with NO_PROXY_OPENER.open(f"http://{host}:{port}/healthz",
+                                  timeout=5) as r:
+            self.assertEqual(r.status, 200)
+            body = json.loads(r.read().decode("utf-8"))
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["consecutive_failures"], 0)
+
+    def test_explicit_wildcard_is_honoured(self):
+        # 显式传 0.0.0.0 时确实绑通配地址 —— 证明这个参数是承重的，
+        # 而不是被函数体里写死的地址忽略掉
+        srv = self._start("0.0.0.0")
+        self.assertEqual(srv.server_address[0], "0.0.0.0")
 
 
 class UnconfiguredStandbyTest(unittest.TestCase):
