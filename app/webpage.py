@@ -1023,7 +1023,10 @@ tr.offrow td{opacity:.62}
       return;
     }
     var t = document.createElement("table");
-    t.style.minWidth = "640px";        // 手机窄屏：表格整体横滑（tblwrap）
+    // 宽度交给全局 table{min-width:100%}：宽屏铺满卡片（与上方搜索框等宽），
+    // 窄屏时表格自身 nowrap 的内容宽就是下限，超出部分由外层 .tblwrap 横滑。
+    // （这里早先写死 minWidth="640px"，内联样式压掉了全局的 100%，于是内容短的
+    //   记录表只有 640px 宽、右侧空出一大片，跟卡片里其它元素不齐。）
     var head = document.createElement("tr");
     ["时间", "设备", "动作", "条目", "地址", "端口", "触发"].forEach(function (h) {
       var th = document.createElement("th"); th.textContent = h; head.appendChild(th);
