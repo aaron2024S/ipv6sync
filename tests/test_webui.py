@@ -503,6 +503,30 @@ class LoginBackoffTest(EnvSandbox):
             self.assertIn("退避", res["error"])
         self.assertEqual(router.attempts, 1, "点多次也只应该试一次登录")
 
+    def test_whitelist_seeds_firewall_state_for_console_header(self):
+        """白名单卡是**实读**总开关的，顺手回填给页头开关。
+
+        不然首次启动刚打开控制台时，页头只能显示「待同步」——明明同一屏的
+        白名单卡已经把它读回来了。回填的只能是显示用的 firewall_on，
+        _fw_seen（「路由器端被人改动」的检测基准）不许动。
+        """
+        router = FakeRouter()
+        cfg = Config(host="192.168.3.1", username="admin", password="x",
+                     session_file=None, rules=[Rule(name="NAS")])
+        node = Node.__new__(Node)
+        node.syncer = Syncer(cfg, router)
+        node.router = router
+        node.cfg = cfg
+        node._host_rows = lambda: []          # 本用例只关心回填
+        self.assertIsNone(node.syncer.firewall_on)     # 首轮 tick 之前是未知
+        self.assertIsNone(node.syncer._fw_seen)
+
+        res = node.whitelist()
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["enabled"])
+        self.assertTrue(node.syncer.firewall_on, "总开关状态应被回填给页头")
+        self.assertIsNone(node.syncer._fw_seen, "_fw_seen 是变更检测基准，不许动")
+
 
 class ConsoleCredentialsTest(EnvSandbox):
     """控制台登录账号来自 compose 的 environment（ADMIN_USERNAME / ADMIN_PASSWORD）。"""

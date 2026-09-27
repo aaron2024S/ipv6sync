@@ -240,7 +240,7 @@ tr.offrow td{opacity:.62}
       <span class="fwtoggle" title="IPv6 防火墙总开关：关闭后白名单整体不生效，同步暂停">
         <span>IPv6 防火墙</span>
         <button id="fwSwitch" class="swbtn" type="button" aria-label="IPv6 防火墙总开关"></button>
-        <b id="fwSwitchTxt">…</b>
+        <b id="fwSwitchTxt">读取中…</b>
       </span>
     </div>
   </div>
@@ -699,12 +699,35 @@ tr.offrow td{opacity:.62}
     syncFoot();
   }
 
+  // ---------- IPv6 防火墙总开关状态（三态，页面里两处共用） ----------
+  // 这个状态**只在路由器那边**，本程序是「实读」来的：跑完一轮同步、且登录
+  // 成功之后才有值。在那之前它是未知 —— 既不能显示成「已关闭」（会让人以为
+  // 路由器上真关着），也不该只写个「未知」：要区分两种「还不知道」——
+  //   pending 待同步：配置没问题，等首轮同步跑完就有值了；
+  //   unset   待配置：还没有路由器密码，永远不会自己变，得先去填。
+  var FW_LABEL = { on: "已开启", off: "已关闭", pending: "待同步", unset: "待配置" };
+  var FW_DOT = { on: "on", off: "warn", pending: "warn", unset: "off" };
+  var FW_TIP = {
+    on: "路由器上的 IPv6 防火墙总开关是开着的",
+    off: "路由器上的 IPv6 防火墙总开关是关着的（白名单整体不生效，同步暂停）",
+    pending: "状态待同步：首轮同步跑完（需要能登录路由器）才读得到真实状态，"
+             + "也可以点「立即同步一次」马上触发一轮",
+    unset: "还没有路由器密码 —— 在「路由器连接」里填好并保存后会自动读取"
+  };
+
+  function fwKey(fw, unconfigured) {
+    if (fw === true) { return "on"; }
+    if (fw === false) { return "off"; }
+    return unconfigured ? "unset" : "pending";
+  }
+
   function renderPills(overview, st) {
     els.pills.textContent = "";
     var c = st.counters || {};
     var ok = !!st.ok;
     var unconf = !!st.unconfigured;
     var fw = st.firewall_ipv6_enabled;
+    var fwk = fwKey(fw, unconf);
     var nAddr = 0, nDev = 0;
     var devLines = [];
     var rules = st.rules || {};
@@ -736,8 +759,7 @@ tr.offrow td{opacity:.62}
         st.last_error ? ("最近错误：" + st.last_error)
                       : ("最近一轮成功于 " + (st.last_success_at || "（尚未成功过）"))],
       ["路由器登录", st.logged_in ? "已登录" : "未登录", st.logged_in ? "on" : "off"],
-      ["IPv6 防火墙", (fw === null || fw === undefined) ? "未知" : (fw ? "已开启" : "已关闭"),
-        (fw === null || fw === undefined) ? "off" : (fw ? "on" : "warn")],
+      ["IPv6 防火墙", FW_LABEL[fwk], FW_DOT[fwk], FW_TIP[fwk]],
       ["采用地址", nAddr + " 个 · " + nDev + " 台设备", nAddr ? "on" : "off",
         "自动维护覆盖 " + nDev + " 台设备、共 " + nAddr + " 个地址，逐台：\n"
         + (devLines.join("\n") || "（还没有任何维护规则）")],
@@ -811,27 +833,35 @@ tr.offrow td{opacity:.62}
     els.who.textContent = state.user;
     var uv = document.getElementById("aboutVersion");
     if (uv) { uv.textContent = "v" + VERSION; }
-    syncFwSwitch(st.firewall_ipv6_enabled);
+    syncFwSwitch(st.firewall_ipv6_enabled, st.unconfigured);
   }
 
   // ---------- 快捷操作：总开关滑动开关 + 重置累计写入 ----------
   var fwBusy = false;
+  var fwLast = "pending";     // 最近一次渲染出的三态 key；点击时按它决定语义
 
-  function syncFwSwitch(enabled) {
+  function syncFwSwitch(fw, unconfigured) {
     var sw = document.getElementById("fwSwitch");
     var txt = document.getElementById("fwSwitchTxt");
     if (!sw || fwBusy) { return; }
-    var on = enabled === true;
-    sw.className = "swbtn" + (on ? " on" : "");
-    txt.textContent = on ? "已开启" : "已关闭";
-    txt.style.color = on ? "var(--ok)" : "var(--muted)";
+    var k = fwKey(fw, unconfigured);
+    fwLast = k;
+    // 「待同步 / 待配置」时开关停在「关」的位置，但文字和颜色都写明这是未知，
+    // 不冒充「已关闭」；hover 有解释，点下去的语义见 click 处理里那句确认。
+    sw.className = "swbtn" + (k === "on" ? " on" : "");
+    sw.title = FW_TIP[k];
+    txt.textContent = FW_LABEL[k];
+    txt.style.color = (k === "on") ? "var(--ok)"
+      : (k === "pending" || k === "unset") ? "var(--warn)" : "var(--muted)";
   }
 
   document.getElementById("fwSwitch").addEventListener("click", function () {
     var sw = document.getElementById("fwSwitch");
-    var want = !sw.classList.contains("on");
+    var known = (fwLast === "on" || fwLast === "off");
+    var want = fwLast !== "on";          // 状态未知时只能往「打开」走
     if (!confirm((want ? "打开" : "关闭") + " IPv6 防火墙总开关？" +
-        (want ? "" : "关闭后白名单整体不生效，同步将暂停，直到重新打开。"))) { return; }
+        (want ? "" : "关闭后白名单整体不生效，同步将暂停，直到重新打开。") +
+        (known ? "" : "\n（状态还没同步回来，这一下按「打开」执行。）"))) { return; }
     fwBusy = true;
     sw.disabled = true;
     api("/api/router/firewall", {
@@ -843,7 +873,7 @@ tr.offrow td{opacity:.62}
         j.ok ? "ok" : "err");
       fwBusy = false;
       sw.disabled = false;
-      syncFwSwitch(want === true);
+      syncFwSwitch(want === true, false);
       return load(false).then(loadWL);
     }).catch(function (e) {
       showOut("防火墙开关", "请求失败：" + e);
@@ -1005,18 +1035,19 @@ tr.offrow td{opacity:.62}
       td = document.createElement("td"); td.textContent = e.ts || "";
       td.style.color = "var(--muted)"; tr.appendChild(td);
       td = document.createElement("td");
-      // 设备名与 MAC 同排显示：NAS(98:6E:E8:21:6F:ED)。早先是名字后面插 <br>
-      // 把 MAC 换到第二行，一行一条记录会更好扫；括号用半角，与设备列表页
-      // 「主机名(MAC)」的写法一致。（单元格 CSS 是 nowrap，不会意外折行。）
+      // 设备名与 MAC 同排显示：NAS（98:6E:E8:21:6F:ED）。早先是名字后面插 <br>
+      // 把 MAC 换到第二行，一行一条记录会更好扫。括号用**全角**，与同一列里
+      // 开关记录的「（全局）」保持一致；MAC 本身仍是等宽灰字。
+      // （单元格 CSS 是 nowrap，不会意外折行。）
       td.appendChild(document.createTextNode(e.device || "（未知）"));
       if (e.mac) {
-        td.appendChild(document.createTextNode("("));
+        td.appendChild(document.createTextNode("（"));
         var m = document.createElement("span");
         m.className = "mono";
         m.style.color = "var(--muted)";
         m.textContent = e.mac;
         td.appendChild(m);
-        td.appendChild(document.createTextNode(")"));
+        td.appendChild(document.createTextNode("）"));
       }
       tr.appendChild(td);
       td = document.createElement("td");

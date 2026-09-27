@@ -261,8 +261,15 @@ class Node:
             if err:
                 return {"ok": False, "error": err}
             try:
+                enabled = trustlist.is_enabled(self.router)
+                # 顺手把总开关状态回填给同步引擎：这是**实读**的结果，而引擎里
+                # 那个值原来要等一整轮 tick 跑完才有 —— 首次启动刚打开控制台
+                # 时页头会显示「待同步」，其实同一屏的白名单卡已经读回来了。
+                # 只回填显示用的 firewall_on，**不碰** _fw_seen：那个是给
+                # 「开关在路由器端被人改动」的变更检测做基准的，不能混。
+                self.syncer.firewall_on = enabled
                 return {"ok": True,
-                        "enabled": trustlist.is_enabled(self.router),
+                        "enabled": enabled,
                         "max": trustlist.MAX_ENTRIES,
                         "entries": trustlist.list_entries(self.router),
                         "rules": [{"name": r.name, "mac": r.mac or "",
