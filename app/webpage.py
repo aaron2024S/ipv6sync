@@ -1005,14 +1005,18 @@ tr.offrow td{opacity:.62}
       td = document.createElement("td"); td.textContent = e.ts || "";
       td.style.color = "var(--muted)"; tr.appendChild(td);
       td = document.createElement("td");
-      td.textContent = e.device || "（未知）";
+      // 设备名与 MAC 同排显示：NAS(98:6E:E8:21:6F:ED)。早先是名字后面插 <br>
+      // 把 MAC 换到第二行，一行一条记录会更好扫；括号用半角，与设备列表页
+      // 「主机名(MAC)」的写法一致。（单元格 CSS 是 nowrap，不会意外折行。）
+      td.appendChild(document.createTextNode(e.device || "（未知）"));
       if (e.mac) {
-        var br = document.createElement("br");
+        td.appendChild(document.createTextNode("("));
         var m = document.createElement("span");
-        m.className = "mono"; m.style.fontSize = "11px";
+        m.className = "mono";
         m.style.color = "var(--muted)";
         m.textContent = e.mac;
-        td.appendChild(br); td.appendChild(m);
+        td.appendChild(m);
+        td.appendChild(document.createTextNode(")"));
       }
       tr.appendChild(td);
       td = document.createElement("td");
